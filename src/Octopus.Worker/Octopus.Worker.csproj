@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-Octopus.Worker-35e010e4-5f09-4e49-95f6-2bea0374cedf</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BuildingBlocks\Octopus.BuildingBlocks\Octopus.BuildingBlocks.csproj" />
+    <ProjectReference Include="..\Modules\Apps\Octopus.Apps\Octopus.Apps.csproj" />
+    <ProjectReference Include="..\Modules\Deployments\Octopus.Deployments\Octopus.Deployments.csproj" />
+    <ProjectReference Include="..\Modules\Runtime\Octopus.Runtime\Octopus.Runtime.csproj" />
+    <ProjectReference Include="..\Modules\GitHub\Octopus.GitHub\Octopus.GitHub.csproj" />
+  </ItemGroup>
+</Project>

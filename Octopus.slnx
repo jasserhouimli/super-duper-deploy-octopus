@@ -1,0 +1,28 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Octopus.Api/Octopus.Api.csproj" />
+    <Project Path="src/Octopus.Worker/Octopus.Worker.csproj" />
+  </Folder>
+  <Folder Name="/src/BuildingBlocks/">
+    <Project Path="src/BuildingBlocks/Octopus.BuildingBlocks/Octopus.BuildingBlocks.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/" />
+  <Folder Name="/src/Modules/Apps/">
+    <Project Path="src/Modules/Apps/Octopus.Apps/Octopus.Apps.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Deployments/">
+    <Project Path="src/Modules/Deployments/Octopus.Deployments/Octopus.Deployments.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/GitHub/">
+    <Project Path="src/Modules/GitHub/Octopus.GitHub/Octopus.GitHub.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Routing/">
+    <Project Path="src/Modules/Routing/Octopus.Routing/Octopus.Routing.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Runtime/">
+    <Project Path="src/Modules/Runtime/Octopus.Runtime/Octopus.Runtime.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Octopus.Tests/Octopus.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.2" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BuildingBlocks\Octopus.BuildingBlocks\Octopus.BuildingBlocks.csproj" />
+    <ProjectReference Include="..\Modules\Apps\Octopus.Apps\Octopus.Apps.csproj" />
+    <ProjectReference Include="..\Modules\Deployments\Octopus.Deployments\Octopus.Deployments.csproj" />
+    <ProjectReference Include="..\Modules\Runtime\Octopus.Runtime\Octopus.Runtime.csproj" />
+    <ProjectReference Include="..\Modules\Routing\Octopus.Routing\Octopus.Routing.csproj" />
+    <ProjectReference Include="..\Modules\GitHub\Octopus.GitHub\Octopus.GitHub.csproj" />
+  </ItemGroup>
+
+</Project>

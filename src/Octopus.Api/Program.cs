@@ -1,0 +1,246 @@
+using Microsoft.EntityFrameworkCore;
+using Octopus.Apps;
+using Octopus.Deployments;
+using Octopus.Routing;
+using Octopus.Runtime;
+using Yarp.ReverseProxy.Configuration;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddOpenApi();
+builder.Services.AddDbContext<OctopusDbContext>(o =>
+    o.UseSqlite(builder.Configuration.GetConnectionString("Octopus")
+        ?? "Data Source=octopus.db"));
+
+builder.Services.AddSingleton<OctopusProxyConfigProvider>();
+builder.Services.AddSingleton<IProxyConfigProvider>(sp => sp.GetRequiredService<OctopusProxyConfigProvider>());
+builder.Services.AddReverseProxy();
+builder.Services.AddHostedService<RouteRefresher>();
+
+var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<OctopusDbContext>();
+    db.Database.EnsureCreated();
+}
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+}
+
+app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTimeOffset.UtcNow }));
+
+// ---- Apps ----
+app.MapPost("/api/apps", async (CreateAppRequest req, OctopusDbContext db, CancellationToken ct) =>
+{
+    if (req is null) return Results.BadRequest(new { error = "Body required." });
+    var check = AppValidator.Create(req.Name ?? "", req.RepoUrl ?? "", req.Branch ?? "main");
+    if (!check.IsSuccess) return Results.BadRequest(new { error = check.Error });
+
+    var entity = check.Value!;
+    entity.Slug = await UniqueSlugAsync(db, entity.Slug, ct);
+    entity.ContainerName = DockerRunner.ContainerName(entity.Slug);
+    if (req.ContainerPort is > 0 and < 65536) { /* stored per-deployment for v0.1 */ }
+
+    db.Apps.Add(entity);
+    await db.SaveChangesAsync(ct);
+    return Results.Created($"/api/apps/{entity.Id}", ToDto(entity));
+});
+
+app.MapGet("/api/apps", async (OctopusDbContext db, CancellationToken ct) =>
+{
+    var apps = await db.Apps.OrderByDescending(a => a.CreatedAt).ToListAsync(ct);
+    return Results.Ok(apps.Select(ToDto).ToList());
+});
+
+app.MapGet("/api/apps/{id:guid}", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+{
+    var entity = await db.Apps.FindAsync([id], ct);
+    return entity is null ? Results.NotFound() : Results.Ok(ToDto(entity));
+});
+
+app.MapDelete("/api/apps/{id:guid}", async (Guid id, OctopusDbContext db, ILogger<Program> log, CancellationToken ct) =>
+{
+    var entity = await db.Apps.FindAsync([id], ct);
+    if (entity is null) return Results.NotFound();
+
+    if (!string.IsNullOrEmpty(entity.ContainerName))
+    {
+        var runner = new DockerRunner();
+        await runner.StopAndRemoveAsync(entity.ContainerName, _ => { }, ct);
+        log.LogInformation("Removed container for app {Slug}", entity.Slug);
+    }
+
+    var deployments = await db.Deployments.Where(d => d.AppId == id).ToListAsync(ct);
+    foreach (var d in deployments)
+    {
+        var logs = db.DeploymentLogs.Where(l => l.DeploymentId == d.Id);
+        db.DeploymentLogs.RemoveRange(logs);
+    }
+    db.Deployments.RemoveRange(deployments);
+    db.Apps.Remove(entity);
+    await db.SaveChangesAsync(ct);
+    RefreshRoutes(app.Services, db);
+    return Results.NoContent();
+});
+
+// ---- Deployments ----
+app.MapPost("/api/apps/{id:guid}/deployments", async (Guid id, CreateDeploymentRequest? req, OctopusDbContext db, CancellationToken ct) =>
+{
+    var entity = await db.Apps.FindAsync([id], ct);
+    if (entity is null) return Results.NotFound(new { error = "App not found." });
+
+    var pending = await db.Deployments.AnyAsync(
+        d => d.AppId == id && (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Cloning || d.Status == DeploymentStatus.Building || d.Status == DeploymentStatus.Starting), ct);
+    if (pending) return Results.Conflict(new { error = "A deployment is already in progress for this app." });
+
+    var deployment = new Deployment
+    {
+        Id = Guid.NewGuid(),
+        AppId = id,
+        Status = DeploymentStatus.Queued,
+        ContainerPort = req?.ContainerPort is > 0 and < 65536 ? req.ContainerPort.Value : 8080,
+        CreatedAt = DateTimeOffset.UtcNow,
+    };
+    entity.Status = AppStatus.Deploying;
+    entity.UpdatedAt = DateTimeOffset.UtcNow;
+
+    db.Deployments.Add(deployment);
+    db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Line = $"Queued deployment {deployment.Id:N} for {entity.Slug}." });
+    await db.SaveChangesAsync(ct);
+    return Results.Accepted($"/api/deployments/{deployment.Id}", new { deployment.Id, status = deployment.Status.ToString() });
+});
+
+app.MapGet("/api/apps/{id:guid}/deployments", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+{
+    if (!await db.Apps.AnyAsync(a => a.Id == id, ct)) return Results.NotFound();
+    var list = await db.Deployments.Where(d => d.AppId == id)
+        .OrderByDescending(d => d.CreatedAt).Take(50).ToListAsync(ct);
+    return Results.Ok(list.Select(d => new
+    {
+        d.Id,
+        d.AppId,
+        status = d.Status.ToString(),
+        d.CommitSha,
+        d.Error,
+        d.ContainerPort,
+        d.CreatedAt,
+        d.StartedAt,
+        d.FinishedAt,
+    }));
+});
+
+app.MapGet("/api/deployments/{id:guid}", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+{
+    var d = await db.Deployments.FindAsync([id], ct);
+    return d is null ? Results.NotFound() : Results.Ok(new
+    {
+        d.Id,
+        d.AppId,
+        status = d.Status.ToString(),
+        d.CommitSha,
+        d.Error,
+        d.ContainerPort,
+        d.CreatedAt,
+        d.StartedAt,
+        d.FinishedAt,
+    });
+});
+
+app.MapGet("/api/deployments/{id:guid}/logs", async (Guid id, int? take, OctopusDbContext db, CancellationToken ct) =>
+{
+    var n = Math.Clamp(take ?? 200, 1, 1000);
+    var logs = await db.DeploymentLogs.Where(l => l.DeploymentId == id)
+        .OrderByDescending(l => l.Id).Take(n).OrderBy(l => l.Id).ToListAsync(ct);
+    return Results.Ok(logs.Select(l => new { l.At, l.Line }));
+});
+
+app.MapPost("/api/apps/{id:guid}/stop", async (Guid id, OctopusDbContext db, ILogger<Program> log, CancellationToken ct) =>
+{
+    var entity = await db.Apps.FindAsync([id], ct);
+    if (entity is null) return Results.NotFound();
+    var runner = new DockerRunner();
+    await runner.StopAndRemoveAsync(entity.ContainerName ?? DockerRunner.ContainerName(entity.Slug), m => log.LogInformation("{Msg}", m), ct);
+    entity.Status = AppStatus.Stopped;
+    entity.UpdatedAt = DateTimeOffset.UtcNow;
+    var running = await db.Deployments.Where(d => d.AppId == id && d.Status == DeploymentStatus.Running)
+        .OrderByDescending(d => d.CreatedAt).FirstOrDefaultAsync(ct);
+    if (running is not null) { running.Status = DeploymentStatus.Stopped; running.FinishedAt = DateTimeOffset.UtcNow; }
+    await db.SaveChangesAsync(ct);
+    RefreshRoutes(app.Services, db);
+    return Results.Ok(ToDto(entity));
+});
+
+app.MapReverseProxy();
+app.Run();
+
+static object ToDto(App a) => new
+{
+    a.Id,
+    a.Name,
+    a.Slug,
+    a.RepoUrl,
+    a.Branch,
+    status = a.Status.ToString(),
+    a.TargetPort,
+    url = $"/apps/{a.Slug}/",
+    a.CreatedAt,
+    a.UpdatedAt,
+};
+
+static async Task<string> UniqueSlugAsync(OctopusDbContext db, string baseSlug, CancellationToken ct)
+{
+    var slug = baseSlug;
+    for (var i = 2; i < 100; i++)
+    {
+        if (!await db.Apps.AnyAsync(a => a.Slug == slug, ct)) return slug;
+        slug = $"{baseSlug}-{i}";
+    }
+    return $"{baseSlug}-{Guid.NewGuid():N}"[..48];
+}
+
+static void RefreshRoutes(IServiceProvider services, OctopusDbContext db)
+{
+    try
+    {
+        var provider = services.GetRequiredService<OctopusProxyConfigProvider>();
+        var running = db.Apps.Where(a => a.Status == AppStatus.Running && a.TargetPort > 0)
+            .Select(a => new { a.Slug, a.TargetPort }).ToList()
+            .Select(x => (x.Slug, x.TargetPort)).ToList();
+        provider.Update(running);
+    }
+    catch { /* best effort */ }
+}
+
+public sealed record CreateAppRequest(string? Name, string? RepoUrl, string? Branch, int? ContainerPort);
+public sealed record CreateDeploymentRequest(int? ContainerPort);
+
+/// <summary>Polls Running apps and refreshes YARP routes. Best-effort; worker is source of truth for status.</summary>
+public sealed class RouteRefresher(IServiceProvider services, ILogger<RouteRefresher> log) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var scope = services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<OctopusDbContext>();
+                var provider = scope.ServiceProvider.GetRequiredService<OctopusProxyConfigProvider>();
+                var running = await db.Apps.Where(a => a.Status == AppStatus.Running && a.TargetPort > 0)
+                    .Select(a => new { a.Slug, a.TargetPort }).ToListAsync(stoppingToken);
+                provider.Update(running.Select(x => (x.Slug, x.TargetPort)).ToList());
+            }
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+            {
+                log.LogDebug(ex, "Route refresh failed.");
+            }
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        }
+    }
+}
+
+// Needed for WebApplicationFactory-style tests if added later.
+public partial class Program;

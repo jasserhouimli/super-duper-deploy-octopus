@@ -55,3 +55,12 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Octopus runtime (never commit local state)
+*.db
+*.db-shm
+*.db-wal
+octopus.db
+workspace/
+src/Octopus.Api/octopus.db*
+src/Octopus.Worker/octopus.db*
