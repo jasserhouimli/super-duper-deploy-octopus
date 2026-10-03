@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Octopus.Apps;
+using Octopus.Deployments.Webhooks;
 
 namespace Octopus.Deployments;
 
@@ -12,6 +13,8 @@ public sealed class OctopusDbContext(DbContextOptions<OctopusDbContext> options)
     public DbSet<App> Apps => Set<App>();
     public DbSet<Deployment> Deployments => Set<Deployment>();
     public DbSet<DeploymentLog> DeploymentLogs => Set<DeploymentLog>();
+    public DbSet<WebhookEvent> WebhookEvents => Set<WebhookEvent>();
+    public DbSet<AppWebhook> AppWebhooks => Set<AppWebhook>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -31,6 +34,24 @@ public sealed class OctopusDbContext(DbContextOptions<OctopusDbContext> options)
             e.HasIndex(x => new { x.AppId, x.CreatedAt });
             e.Property(x => x.CommitSha).HasMaxLength(64);
             e.Property(x => x.Error).HasMaxLength(2000);
+            e.Property(x => x.ProjectPath).HasMaxLength(300);
+        });
+        b.Entity<WebhookEvent>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.AppId, x.DeliveryId }).IsUnique();
+            e.HasIndex(x => new { x.AppId, x.ReceivedAt });
+            e.Property(x => x.DeliveryId).HasMaxLength(100).IsRequired();
+            e.Property(x => x.EventType).HasMaxLength(30).IsRequired();
+            e.Property(x => x.Ref).HasMaxLength(200);
+            e.Property(x => x.CommitSha).HasMaxLength(64);
+            e.Property(x => x.PayloadHash).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Error).HasMaxLength(500);
+        });
+        b.Entity<AppWebhook>(e =>
+        {
+            e.HasKey(x => x.AppId);
+            e.Property(x => x.Secret).HasMaxLength(200).IsRequired();
         });
         b.Entity<DeploymentLog>(e =>
         {

@@ -1,6 +1,9 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Octopus.Apps;
 using Octopus.Deployments;
+using Octopus.Deployments.Webhooks;
 using Octopus.Routing;
 using Octopus.Runtime;
 using Yarp.ReverseProxy.Configuration;
@@ -21,8 +24,7 @@ var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<OctopusDbContext>();
-    db.Database.EnsureCreated();
+    DbBootstrap.EnsureUpgraded(scope.ServiceProvider.GetRequiredService<OctopusDbContext>());
 }
 
 if (app.Environment.IsDevelopment())
@@ -51,8 +53,9 @@ app.MapPost("/api/apps", async (CreateAppRequest req, OctopusDbContext db, Cance
 
 app.MapGet("/api/apps", async (OctopusDbContext db, CancellationToken ct) =>
 {
-    var apps = await db.Apps.OrderByDescending(a => a.CreatedAt).ToListAsync(ct);
-    return Results.Ok(apps.Select(ToDto).ToList());
+    // NOTE: SQLite cannot ORDER BY DateTimeOffset server-side; sort in memory.
+    var apps = await db.Apps.ToListAsync(ct);
+    return Results.Ok(apps.OrderByDescending(a => a.CreatedAt).Select(ToDto).ToList());
 });
 
 app.MapGet("/api/apps/{id:guid}", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
@@ -80,6 +83,9 @@ app.MapDelete("/api/apps/{id:guid}", async (Guid id, OctopusDbContext db, ILogge
         db.DeploymentLogs.RemoveRange(logs);
     }
     db.Deployments.RemoveRange(deployments);
+    db.WebhookEvents.RemoveRange(db.WebhookEvents.Where(e => e.AppId == id));
+    var sub = await db.AppWebhooks.FindAsync([id], ct);
+    if (sub is not null) db.AppWebhooks.Remove(sub);
     db.Apps.Remove(entity);
     await db.SaveChangesAsync(ct);
     RefreshRoutes(app.Services, db);
@@ -96,12 +102,21 @@ app.MapPost("/api/apps/{id:guid}/deployments", async (Guid id, CreateDeploymentR
         d => d.AppId == id && (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Cloning || d.Status == DeploymentStatus.Building || d.Status == DeploymentStatus.Starting), ct);
     if (pending) return Results.Conflict(new { error = "A deployment is already in progress for this app." });
 
+    string? projectPath = null;
+    if (!string.IsNullOrWhiteSpace(req?.ProjectPath))
+    {
+        var norm = Octopus.Runtime.BuildPlanDetector.NormalizeProjectPath(req.ProjectPath);
+        if (!norm.IsSuccess) return Results.BadRequest(new { error = norm.Error });
+        projectPath = norm.Value;
+    }
+
     var deployment = new Deployment
     {
         Id = Guid.NewGuid(),
         AppId = id,
         Status = DeploymentStatus.Queued,
         ContainerPort = req?.ContainerPort is > 0 and < 65536 ? req.ContainerPort.Value : 8080,
+        ProjectPath = projectPath,
         CreatedAt = DateTimeOffset.UtcNow,
     };
     entity.Status = AppStatus.Deploying;
@@ -116,8 +131,7 @@ app.MapPost("/api/apps/{id:guid}/deployments", async (Guid id, CreateDeploymentR
 app.MapGet("/api/apps/{id:guid}/deployments", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
 {
     if (!await db.Apps.AnyAsync(a => a.Id == id, ct)) return Results.NotFound();
-    var list = await db.Deployments.Where(d => d.AppId == id)
-        .OrderByDescending(d => d.CreatedAt).Take(50).ToListAsync(ct);
+    var list = await DeploymentQueries.ListByAppAsync(db, id, 50, ct);
     return Results.Ok(list.Select(d => new
     {
         d.Id,
@@ -126,6 +140,7 @@ app.MapGet("/api/apps/{id:guid}/deployments", async (Guid id, OctopusDbContext d
         d.CommitSha,
         d.Error,
         d.ContainerPort,
+        d.ProjectPath,
         d.CreatedAt,
         d.StartedAt,
         d.FinishedAt,
@@ -143,6 +158,7 @@ app.MapGet("/api/deployments/{id:guid}", async (Guid id, OctopusDbContext db, Ca
         d.CommitSha,
         d.Error,
         d.ContainerPort,
+        d.ProjectPath,
         d.CreatedAt,
         d.StartedAt,
         d.FinishedAt,
@@ -165,16 +181,13 @@ app.MapPost("/api/apps/{id:guid}/stop", async (Guid id, OctopusDbContext db, ILo
     await runner.StopAndRemoveAsync(entity.ContainerName ?? DockerRunner.ContainerName(entity.Slug), m => log.LogInformation("{Msg}", m), ct);
     entity.Status = AppStatus.Stopped;
     entity.UpdatedAt = DateTimeOffset.UtcNow;
-    var running = await db.Deployments.Where(d => d.AppId == id && d.Status == DeploymentStatus.Running)
-        .OrderByDescending(d => d.CreatedAt).FirstOrDefaultAsync(ct);
+    var running = (await db.Deployments.Where(d => d.AppId == id && d.Status == DeploymentStatus.Running)
+        .ToListAsync(ct)).OrderByDescending(d => d.CreatedAt).FirstOrDefault();
     if (running is not null) { running.Status = DeploymentStatus.Stopped; running.FinishedAt = DateTimeOffset.UtcNow; }
     await db.SaveChangesAsync(ct);
     RefreshRoutes(app.Services, db);
     return Results.Ok(ToDto(entity));
 });
-
-app.MapReverseProxy();
-app.Run();
 
 static object ToDto(App a) => new
 {
@@ -214,8 +227,106 @@ static void RefreshRoutes(IServiceProvider services, OctopusDbContext db)
     catch { /* best effort */ }
 }
 
-public sealed record CreateAppRequest(string? Name, string? RepoUrl, string? Branch, int? ContainerPort);
-public sealed record CreateDeploymentRequest(int? ContainerPort);
+// ---- Webhooks (GitHub push -> queued deployment) ----
+app.MapPost("/api/apps/{id:guid}/webhook-token", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+{
+    var entity = await db.Apps.FindAsync([id], ct);
+    if (entity is null) return Results.NotFound(new { error = "App not found." });
+
+    // 256-bit secret, base64url. Returned once here; verification needs the
+    // original value, so it is stored in the control-plane DB (never logged).
+    var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+        .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+    var sub = await db.AppWebhooks.FindAsync([id], ct);
+    if (sub is null)
+    {
+        sub = new AppWebhook { AppId = id, Secret = secret, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        db.AppWebhooks.Add(sub);
+    }
+    else
+    {
+        sub.Secret = secret;
+        sub.UpdatedAt = DateTimeOffset.UtcNow;
+    }
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new
+    {
+        secret,
+        webhookUrl = $"/api/hooks/github/{id}",
+        events = new[] { "push", "ping" },
+        branch = entity.Branch,
+        contentType = "application/json",
+    });
+});
+
+app.MapGet("/api/apps/{id:guid}/webhook-events", async (Guid id, int? take, OctopusDbContext db, CancellationToken ct) =>
+{
+    if (!await db.Apps.AnyAsync(a => a.Id == id, ct)) return Results.NotFound();
+    var n = Math.Clamp(take ?? 50, 1, 200);
+    var events = await DeploymentQueries.ListWebhookEventsAsync(db, id, n, ct);
+    return Results.Ok(events.Select(e => new
+    {
+        e.Id,
+        e.DeliveryId,
+        e.EventType,
+        e.Ref,
+        e.CommitSha,
+        status = e.Status.ToString(),
+        e.DeploymentId,
+        e.Error,
+        e.ReceivedAt,
+    }));
+});
+
+app.MapPost("/api/hooks/github/{id:guid}", async (Guid id, HttpContext ctx, OctopusDbContext db, CancellationToken ct) =>
+{
+    var rawBody = await ReadBodyCappedAsync(ctx.Request, 1_000_000);
+    if (rawBody is null)
+        return Results.Json(new { error = "Payload too large (max 1 MB)." }, statusCode: 413);
+
+    var headers = ctx.Request.Headers;
+    var result = await WebhookService.HandleAsync(
+        db, id,
+        headers["X-GitHub-Event"].ToString(),
+        headers["X-GitHub-Delivery"].ToString(),
+        headers["X-Hub-Signature-256"].ToString(),
+        rawBody, ct);
+
+    return result.Outcome switch
+    {
+        WebhookOutcome.Queued => Results.Accepted($"/api/deployments/{result.DeploymentId}",
+            new { delivery = headers["X-GitHub-Delivery"].ToString(), deploymentId = result.DeploymentId }),
+        WebhookOutcome.Duplicate => Results.Ok(new { duplicate = true, deploymentId = result.DeploymentId, message = result.Message }),
+        WebhookOutcome.Ping => Results.Ok(new { message = result.Message }),
+        WebhookOutcome.Ignored => Results.Ok(new { ignored = true, message = result.Message }),
+        WebhookOutcome.AppNotFound => Results.NotFound(new { error = result.Message }),
+        WebhookOutcome.NotConfigured => Results.NotFound(new { error = result.Message }),
+        WebhookOutcome.Unauthorized => Results.Json(new { error = result.Message }, statusCode: 401),
+        WebhookOutcome.BadPayload => Results.BadRequest(new { error = result.Message }),
+        WebhookOutcome.Conflict => Results.Conflict(new { error = result.Message }),
+        _ => Results.BadRequest(new { error = result.Message }),
+    };
+});
+
+app.MapReverseProxy();
+app.Run();
+
+/// <summary>Reads the request body as text with a hard cap. Null = over the cap.</summary>
+static async Task<string?> ReadBodyCappedAsync(HttpRequest request, int maxChars)
+{
+    if (request.ContentLength > maxChars) return null;
+    using var reader = new StreamReader(request.Body, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
+    var sb = new StringBuilder();
+    var buf = new char[8192];
+    int read;
+    while ((read = await reader.ReadAsync(buf, 0, buf.Length)) > 0)
+    {
+        sb.Append(buf, 0, read);
+        if (sb.Length > maxChars) return null;
+    }
+    return sb.ToString();
+}
 
 /// <summary>Polls Running apps and refreshes YARP routes. Best-effort; worker is source of truth for status.</summary>
 public sealed class RouteRefresher(IServiceProvider services, ILogger<RouteRefresher> log) : BackgroundService
@@ -244,3 +355,6 @@ public sealed class RouteRefresher(IServiceProvider services, ILogger<RouteRefre
 
 // Needed for WebApplicationFactory-style tests if added later.
 public partial class Program;
+
+public sealed record CreateAppRequest(string? Name, string? RepoUrl, string? Branch, int? ContainerPort);
+public sealed record CreateDeploymentRequest(int? ContainerPort, string? ProjectPath);

@@ -10,6 +10,7 @@ namespace Octopus.Worker;
 /// Claims Queued deployments (oldest first) and runs Clone -> Build -> Start.
 /// Single-worker claim is sufficient for v0.1; document the limit and add leases for multi-worker.
 /// Stale Running recovery: on startup, requeue Cloning/Building/Starting as Queued (crash recovery).
+/// Build: repo Dockerfile wins, else the dotnet buildpack generates one (see Runtime).
 /// </summary>
 public sealed class DeploymentWorker(
     IServiceProvider services,
@@ -67,8 +68,9 @@ public sealed class DeploymentWorker(
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<OctopusDbContext>();
-        var next = await db.Deployments.Where(d => d.Status == DeploymentStatus.Queued)
-            .OrderBy(d => d.CreatedAt).FirstOrDefaultAsync(ct);
+        // SQLite cannot ORDER BY DateTimeOffset server-side; queued rows are few, sort in memory.
+        var next = (await db.Deployments.Where(d => d.Status == DeploymentStatus.Queued)
+            .ToListAsync(ct)).OrderBy(d => d.CreatedAt).FirstOrDefault();
         if (next is null) return null;
 
         // v0.1 single-claimer: mark Cloning immediately. Multi-worker needs a lease column + atomic UPDATE.
@@ -131,7 +133,14 @@ public sealed class DeploymentWorker(
             var image = DockerRunner.ImageName(app.Slug, deployment.Id);
             // Persist partial state so polling sees progress.
             await db.SaveChangesAsync(ct);
-            var build = await docker.BuildAsync(workDir, image, Log, ct);
+            var planCheck = BuildPlanDetector.Detect(workDir, deployment.ProjectPath);
+            if (!planCheck.IsSuccess || planCheck.Value is null)
+                throw new InvalidOperationException($"Buildpack: {planCheck.Error}");
+            var plan = planCheck.Value;
+            Log(plan is DotnetPlan dotnet
+                ? $"Build plan: dotnet buildpack ({dotnet.ProjectRelativePath})."
+                : "Build plan: repo Dockerfile.");
+            var build = await docker.BuildWithPlanAsync(workDir, image, plan, Log, ct);
             await db.SaveChangesAsync(ct);
             if (!build.IsSuccess) throw new InvalidOperationException(build.Error);
 

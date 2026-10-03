@@ -8,6 +8,8 @@ public sealed class Deployment
     public string? CommitSha { get; set; }
     public string? Error { get; set; }
     public int ContainerPort { get; set; } = 8080;
+    /// <summary>Optional override for the dotnet buildpack (relative .csproj path). Null = auto-detect.</summary>
+    public string? ProjectPath { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? FinishedAt { get; set; }

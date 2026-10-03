@@ -18,6 +18,36 @@ public sealed class DockerRunner
         if (!File.Exists(Path.Combine(contextDir, "Dockerfile")))
             return Result<string>.Fail("v0.1 requires a Dockerfile at the repo root (dotnet buildpack is on the roadmap).");
 
+        return await BuildImageAsync(contextDir, imageName, log, ct);
+    }
+
+    /// <summary>
+    /// v0.2: builds from the repo Dockerfile or a buildpack-generated one.
+    /// Generated Dockerfiles are written into the throwaway workspace only.
+    /// </summary>
+    public async Task<Result<string>> BuildWithPlanAsync(
+        string contextDir, string imageName, BuildPlan plan, Action<string> log, CancellationToken ct)
+    {
+        if (plan is DotnetPlan dotnet)
+        {
+            log($"Buildpack: no Dockerfile — generating one for {dotnet.ProjectRelativePath} ({DockerfileGenerator.SdkImage}).");
+            try
+            {
+                await File.WriteAllTextAsync(
+                    Path.Combine(contextDir, "Dockerfile"),
+                    DockerfileGenerator.ForDotnet(dotnet.ProjectRelativePath, dotnet.AssemblyName), ct);
+            }
+            catch (Exception ex)
+            {
+                return Result<string>.Fail($"Cannot write generated Dockerfile: {ex.GetType().Name}.");
+            }
+        }
+
+        return await BuildImageAsync(contextDir, imageName, log, ct);
+    }
+
+    private async Task<Result<string>> BuildImageAsync(string contextDir, string imageName, Action<string> log, CancellationToken ct)
+    {
         log($"$ docker build -t {imageName} .");
         var run = await ProcessRunner.RunAsync("docker", $"build -t \"{imageName}\" .", contextDir, TimeSpan.FromMinutes(10), ct);
         AppendLog(log, run.StdOut);
