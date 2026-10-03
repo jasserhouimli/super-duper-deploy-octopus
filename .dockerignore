@@ -1,0 +1,12 @@
+# Keep image build contexts small.
+bin/
+obj/
+.git/
+.vs/
+workspace/
+*.db
+*.db-shm
+*.db-wal
+octopus.db*
+TestResults/
+.vscode/

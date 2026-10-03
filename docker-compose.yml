@@ -1,0 +1,48 @@
+# Octopus platform (API + worker) on a Linux Docker host.
+#
+# Linux-first: both services use host networking so the worker's
+# `docker run -p 127.0.0.1:<port>` app containers are reachable by the API's
+# YARP routes exactly like host-run `dotnet run` processes.
+# `network_mode: host` does NOT work on Docker Desktop for Windows/Mac
+# (host = the Desktop VM) — there, run Api + Worker via `dotnet run` instead.
+#
+# Usage:
+#   docker compose up --build -d
+#   curl http://localhost:5000/health
+#   docker compose logs -f
+#   docker compose down        # data persists in the octopus-data volume
+
+name: octopus
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: src/Octopus.Api/Dockerfile
+    network_mode: host
+    environment:
+      ASPNETCORE_URLS: http://+:5000
+      ConnectionStrings__Octopus: Data Source=/data/octopus.db
+      Octopus__Workspace: /data/workspace
+    volumes:
+      - octopus-data:/data
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: src/Octopus.Worker/Dockerfile
+    network_mode: host
+    environment:
+      ConnectionStrings__Octopus: Data Source=/data/octopus.db
+      Octopus__Workspace: /data/workspace
+    volumes:
+      - octopus-data:/data
+      # Worker shells out to the host's docker CLI to build/run app containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    depends_on:
+      - api
+
+volumes:
+  octopus-data:

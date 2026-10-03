@@ -1,5 +1,7 @@
 # Octopus — .NET Mini Cloud (v0.2)
 
+![ci](https://github.com/jasserhouimli/super-duper-deploy-octopus/actions/workflows/ci.yml/badge.svg)
+
 A minimal PaaS for deploying GitHub repositories: register an app, trigger a deployment
 (manually or via GitHub webhook), the worker clones, builds (`Dockerfile` or generated
 dotnet buildpack), `docker run`s it, and the API reverse-proxies traffic to `/apps/{slug}/`.
@@ -34,11 +36,25 @@ Domain behavior lives in modules, not in Api/Worker.
 
 ## Requirements
 
-- .NET SDK 10 (`dotnet --info`)
+- .NET SDK 10 (`dotnet --info`; pinned via `global.json`)
 - Docker Desktop / Engine running (`docker info`)
 - git (`git --version`)
 
-## Quickstart
+## Run with Docker Compose (Linux host)
+
+```powershell
+docker compose up --build -d
+curl http://localhost:5000/health
+docker compose logs -f
+docker compose down   # data persists in the octopus-data volume
+```
+
+Api + worker share one SQLite file and workspace through the `octopus-data`
+volume; the worker builds/runs app containers through the host's Docker socket.
+Linux-first: `network_mode: host` does not work on Docker Desktop for
+Windows/Mac — there, run Api + Worker via `dotnet run` (see below).
+
+## Run with dotnet (Windows/Mac/Linux)
 
 ```powershell
 dotnet build Octopus.slnx
@@ -162,8 +178,9 @@ Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
 1. Postgres + EF Core migrations, per-app env vars (secret references, not values in logs).
 2. ~~GitHub webhooks (HMAC, idempotency key) -> auto-deploy.~~ Done (v0.2).
 3. ~~`dotnet` buildpack (no Dockerfile needed)~~ Done (v0.2); next: health-gated traffic switch.
-4. Auth (API keys/OIDC), per-app resource quotas, log streaming.
-5. Multi-worker leases/heartbeats, blue/green, custom domains.
+4. ~~CI (build + test + architecture tests + image builds) and compose.~~ Done (v0.3).
+5. Auth (API keys/OIDC), per-app resource quotas, log streaming.
+6. Multi-worker leases/heartbeats, blue/green, custom domains.
 
 ## Repo layout
 
@@ -172,5 +189,5 @@ src/Octopus.Api        HTTP + YARP + EF Sqlite wiring
 src/Octopus.Worker     DeploymentWorker (claim -> clone -> build-plan -> build -> start)
 src/Modules/...        Apps, Deployments (+Webhooks), GitHub, Runtime (+Buildpack), Routing
 src/BuildingBlocks     Result, Slug, ProcessRunner
-tests/Octopus.Tests    validators, webhooks, buildpack, sqlite ordering (42 tests)
+tests/Octopus.Tests    validators, webhooks, buildpack, sqlite ordering, architecture (44 tests)
 ```

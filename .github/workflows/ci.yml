@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore Octopus.slnx
+
+      - name: Build (Release, warnings as errors off, vuln audit on)
+        run: dotnet build Octopus.slnx --no-restore -c Release
+
+      - name: Test (unit + webhook + buildpack + architecture)
+        run: dotnet test Octopus.slnx --no-build -c Release
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose file
+        run: docker compose config --quiet
+
+      - name: Build platform images (validates both Dockerfiles)
+        run: docker compose build
