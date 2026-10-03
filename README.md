@@ -4,8 +4,6 @@ A minimal PaaS for deploying GitHub repositories: register an app, trigger a dep
 (manually or via GitHub webhook), the worker clones, builds (`Dockerfile` or generated
 dotnet buildpack), `docker run`s it, and the API reverse-proxies traffic to `/apps/{slug}/`.
 
-Built with .NET 10 as a modular monolith with vertical slices.
-
 ## Architecture
 
 ```text
