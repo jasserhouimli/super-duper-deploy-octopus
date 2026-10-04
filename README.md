@@ -24,10 +24,10 @@ Modules (`src/Modules`): each owns its domain, no cycles.
 
 | Module | Owns | Does NOT own |
 |---|---|---|
-| `Apps` | App entity, creation validation | builds, containers |
-| `Deployments` | Deployment state, logs, webhook intake/idempotency, `OctopusDbContext` | docker, git |
+| `Apps` | App entity, creation validation, env-var keys/validation | builds, containers, secret values in logs |
+| `Deployments` | Deployment state, logs, webhook intake/idempotency, env-var storage, `OctopusDbContext` | docker, git |
 | `GitHub` | URL validation, shallow clone | deployment state |
-| `Runtime` | build plans, docker build/run/stop, port allocation | git, routing |
+| `Runtime` | build plans, docker build/run/stop (+ `--env-file` injection), port allocation | git, routing, secret values in logs |
 | `Routing` | YARP dynamic config provider | deployment decisions |
 | `BuildingBlocks` | Result, Slug, ProcessRunner | domain rules |
 
@@ -83,6 +83,11 @@ $app = Invoke-RestMethod -Method Post -Uri http://localhost:5000/api/apps `
   -ContentType application/json `
   -Body '{"name":"demo","repoUrl":"https://github.com/owner/repo","branch":"main"}'
 $app.id
+
+# Per-app env vars (values stored, never listed/logged; injected at docker run):
+Invoke-RestMethod -Method Put -Uri "http://localhost:5000/api/apps/$($app.id)/env" `
+  -ContentType application/json -Body '{"vars":{"API_KEY":"s3cret","PORT":"8080"}}'
+Invoke-RestMethod "http://localhost:5000/api/apps/$($app.id)/env"  # -> keys only
 
 # Dockerfile repo, or dotnet web project (buildpack), optionally pinned:
 Invoke-RestMethod -Method Post -Uri "http://localhost:5000/api/apps/$($app.id)/deployments" `
@@ -149,6 +154,9 @@ A repo `Dockerfile` always wins. Override per deployment via `projectPath`
 | POST | `/api/apps/{id}/stop` | docker stop + mark Stopped |
 | POST | `/api/apps/{id}/webhook-token` | create/rotate secret (shown once) |
 | GET | `/api/apps/{id}/webhook-events?take=50` | delivery receipts |
+| GET | `/api/apps/{id}/env` | list env key names only (values never returned) |
+| PUT | `/api/apps/{id}/env` | replace env set `{vars:{KEY:value}}`; max 50 vars, 8 KB/value, 64 KB total |
+| DELETE | `/api/apps/{id}/env/{key}` | remove one variable |
 | POST | `/api/hooks/github/{id}` | GitHub receiver (`X-GitHub-Event/Delivery`, `X-Hub-Signature-256`) |
 
 Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
@@ -160,6 +168,10 @@ Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
   payloads are never persisted; secrets live in the control-plane DB, returned only
   at creation/rotation, never logged.
 - No secret logging anywhere: logs use `owner/repo`, never full URLs/tokens.
+- App env vars: values stored in the control-plane DB, injected via a throwaway
+  docker `--env-file` (never in `docker run -e` args), list endpoints return key
+  names only, logs record key names/count only. Keys `^[A-Za-z_][A-Za-z0-9_]*$`
+  (max 64), values max 8 KB without NUL/newlines, max 50 vars / 64 KB per app.
 - Containers: bound to `127.0.0.1` only, `--memory 512m --cpus 1.0`, fixed host-port range `5100-5999`.
 - Process timeouts everywhere (clone 2m, build 10m, run 2m); log output truncated.
 - Payload limits: names/branches/URLs/paths length-checked; logs capped per-line and per-query.
@@ -175,7 +187,7 @@ Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
 
 ## Roadmap
 
-1. Postgres + EF Core migrations, per-app env vars (secret references, not values in logs).
+1. Postgres + EF Core migrations; ~~per-app env vars (secret references, not values in logs)~~ Done (v0.4).
 2. ~~GitHub webhooks (HMAC, idempotency key) -> auto-deploy.~~ Done (v0.2).
 3. ~~`dotnet` buildpack (no Dockerfile needed)~~ Done (v0.2); next: health-gated traffic switch.
 4. ~~CI (build + test + architecture tests + image builds) and compose.~~ Done (v0.3).
@@ -186,8 +198,8 @@ Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
 
 ```text
 src/Octopus.Api        HTTP + YARP + EF Sqlite wiring
-src/Octopus.Worker     DeploymentWorker (claim -> clone -> build-plan -> build -> start)
-src/Modules/...        Apps, Deployments (+Webhooks), GitHub, Runtime (+Buildpack), Routing
+src/Octopus.Worker     DeploymentWorker (claim -> clone -> build-plan -> build -> start w/ env-file)
+src/Modules/...        Apps (+EnvVars), Deployments (+Webhooks, EnvVar storage), GitHub, Runtime (+Buildpack, env-file), Routing
 src/BuildingBlocks     Result, Slug, ProcessRunner
-tests/Octopus.Tests    validators, webhooks, buildpack, sqlite ordering, architecture (44 tests)
+tests/Octopus.Tests    validators, webhooks, buildpack, env vars, sqlite ordering, architecture (61 tests)
 ```

@@ -39,6 +39,15 @@ public static class DbBootstrap
             );
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_WebhookEvents_AppId_DeliveryId" ON "WebhookEvents" ("AppId", "DeliveryId");
             CREATE INDEX IF NOT EXISTS "IX_WebhookEvents_AppId_ReceivedAt" ON "WebhookEvents" ("AppId", "ReceivedAt");
+            CREATE TABLE IF NOT EXISTS "AppEnvVars" (
+                "AppId" TEXT NOT NULL,
+                "Key" TEXT NOT NULL,
+                "Value" TEXT NOT NULL,
+                "CreatedAt" TEXT NOT NULL,
+                "UpdatedAt" TEXT NOT NULL,
+                CONSTRAINT "PK_AppEnvVars" PRIMARY KEY ("AppId", "Key")
+            );
+            CREATE INDEX IF NOT EXISTS "IX_AppEnvVars_AppId" ON "AppEnvVars" ("AppId");
             """);
 
         if (!ColumnExists(db, "Deployments", "ProjectPath"))

@@ -57,18 +57,74 @@ public sealed class DockerRunner
     }
 
     public async Task<Result<int>> StartAsync(string containerName, string imageName, int hostPort, int containerPort, Action<string> log, CancellationToken ct)
+        => await StartWithEnvAsync(containerName, imageName, hostPort, containerPort, null, log, ct);
+
+    /// <summary>
+    /// Starts a container, injecting env vars via a throwaway --env-file so values
+    /// never appear in process arguments or logs. Only key names/count are logged.
+    /// </summary>
+    public async Task<Result<int>> StartWithEnvAsync(
+        string containerName,
+        string imageName,
+        int hostPort,
+        int containerPort,
+        IReadOnlyDictionary<string, string>? envVars,
+        Action<string> log,
+        CancellationToken ct)
     {
         await StopAndRemoveAsync(containerName, log, ct);
 
-        // Bind loopback only + resource limits. Container port defaults to 8080 (ASP.NET) but is overridable.
-        var args = $"run -d --rm --name \"{containerName}\" -p 127.0.0.1:{hostPort}:{containerPort} --memory 512m --cpus 1.0 \"{imageName}\"";
-        log("$ docker " + args);
-        var run = await ProcessRunner.RunAsync("docker", args, Environment.CurrentDirectory, TimeSpan.FromMinutes(2), ct);
-        AppendLog(log, run.StdOut);
-        AppendLog(log, run.StdErr);
-        if (run.TimedOut) return Result<int>.Fail("Docker run timed out.");
-        return run.ExitCode == 0 ? Result<int>.Ok(hostPort) : Result<int>.Fail($"Docker run failed (exit {run.ExitCode}).");
+        string? envFile = null;
+        try
+        {
+            if (envVars is { Count: > 0 })
+            {
+                envFile = await WriteEnvFileAsync(envVars, ct);
+                log($"Injecting {envVars.Count} env var(s): [{string.Join(",", envVars.Keys.OrderBy(k => k))}] (values redacted).");
+            }
+
+            // Bind loopback only + resource limits. Container port defaults to 8080 (ASP.NET) but is overridable.
+            var args = BuildStartArgs(containerName, imageName, hostPort, containerPort, envFile);
+            log("$ docker " + RedactForLog(args));
+            var run = await ProcessRunner.RunAsync("docker", args, Environment.CurrentDirectory, TimeSpan.FromMinutes(2), ct);
+            AppendLog(log, run.StdOut);
+            AppendLog(log, run.StdErr);
+            if (run.TimedOut) return Result<int>.Fail("Docker run timed out.");
+            return run.ExitCode == 0 ? Result<int>.Ok(hostPort) : Result<int>.Fail($"Docker run failed (exit {run.ExitCode}).");
+        }
+        finally
+        {
+            if (envFile is not null)
+            {
+                try { File.Delete(envFile); } catch { /* best effort */ }
+            }
+        }
     }
+
+    /// <summary>Builds `docker run` args. Env values are never embedded — only an --env-file path.</summary>
+    public static string BuildStartArgs(string containerName, string imageName, int hostPort, int containerPort, string? envFilePath)
+    {
+        var envPart = envFilePath is null ? string.Empty : $" --env-file \"{envFilePath}\"";
+        return $"run -d --rm --name \"{containerName}\"{envPart} -p 127.0.0.1:{hostPort}:{containerPort} --memory 512m --cpus 1.0 \"{imageName}\"";
+    }
+
+    /// <summary>Serializes validated env vars to docker --env-file format (KEY=VALUE per line).</summary>
+    public static string BuildEnvFileContent(IReadOnlyDictionary<string, string> envVars)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var (k, v) in envVars.OrderBy(e => e.Key, StringComparer.Ordinal))
+            sb.Append(k).Append('=').Append(v).Append('\n');
+        return sb.ToString();
+    }
+
+    internal static async Task<string> WriteEnvFileAsync(IReadOnlyDictionary<string, string> envVars, CancellationToken ct)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"octopus-env-{Guid.NewGuid():N}.env");
+        await File.WriteAllTextAsync(path, BuildEnvFileContent(envVars), ct);
+        return path;
+    }
+
+    internal static string RedactForLog(string args) => args; // args never contain values (env-file path only)
 
     public async Task StopAndRemoveAsync(string containerName, Action<string> log, CancellationToken ct)
     {

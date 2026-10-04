@@ -15,6 +15,7 @@ public sealed class OctopusDbContext(DbContextOptions<OctopusDbContext> options)
     public DbSet<DeploymentLog> DeploymentLogs => Set<DeploymentLog>();
     public DbSet<WebhookEvent> WebhookEvents => Set<WebhookEvent>();
     public DbSet<AppWebhook> AppWebhooks => Set<AppWebhook>();
+    public DbSet<AppEnvVar> AppEnvVars => Set<AppEnvVar>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -58,6 +59,13 @@ public sealed class OctopusDbContext(DbContextOptions<OctopusDbContext> options)
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.DeploymentId);
             e.Property(x => x.Line).HasMaxLength(2000).IsRequired();
+        });
+        b.Entity<AppEnvVar>(e =>
+        {
+            e.HasKey(x => new { x.AppId, x.Key });
+            e.HasIndex(x => x.AppId);
+            e.Property(x => x.Key).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Value).HasMaxLength(8192).IsRequired();
         });
     }
 }

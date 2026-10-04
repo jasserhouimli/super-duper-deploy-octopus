@@ -227,6 +227,66 @@ static void RefreshRoutes(IServiceProvider services, OctopusDbContext db)
     catch { /* best effort */ }
 }
 
+// ---- App env vars (secret references; values never returned or logged) ----
+app.MapGet("/api/apps/{id:guid}/env", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+{
+    if (!await db.Apps.AnyAsync(a => a.Id == id, ct)) return Results.NotFound(new { error = "App not found." });
+    var keys = await db.AppEnvVars.Where(e => e.AppId == id)
+        .Select(e => e.Key).ToListAsync(ct);
+    keys.Sort(StringComparer.Ordinal);
+    return Results.Ok(new { keys, count = keys.Count });
+});
+
+app.MapPut("/api/apps/{id:guid}/env", async (Guid id, SetEnvRequest? req, OctopusDbContext db, CancellationToken ct) =>
+{
+    var entity = await db.Apps.FindAsync([id], ct);
+    if (entity is null) return Results.NotFound(new { error = "App not found." });
+
+    var check = AppEnvVars.Validate(req?.Vars);
+    if (!check.IsSuccess) return Results.BadRequest(new { error = check.Error });
+    var vars = check.Value!;
+
+    var existing = await db.AppEnvVars.Where(e => e.AppId == id).ToListAsync(ct);
+    var now = DateTimeOffset.UtcNow;
+    foreach (var e in existing)
+    {
+        if (vars.TryGetValue(e.Key, out var next))
+        {
+            if (!string.Equals(e.Value, next, StringComparison.Ordinal))
+            {
+                e.Value = next;
+                e.UpdatedAt = now;
+            }
+            vars.Remove(e.Key);
+        }
+        else
+        {
+            db.AppEnvVars.Remove(e);
+        }
+    }
+    foreach (var (k, v) in vars)
+        db.AppEnvVars.Add(new AppEnvVar { AppId = id, Key = k, Value = v, CreatedAt = now, UpdatedAt = now });
+
+    entity.UpdatedAt = now;
+    await db.SaveChangesAsync(ct);
+
+    var keys = await db.AppEnvVars.Where(e => e.AppId == id)
+        .Select(e => e.Key).ToListAsync(ct);
+    keys.Sort(StringComparer.Ordinal);
+    return Results.Ok(new { keys, count = keys.Count });
+});
+
+app.MapDelete("/api/apps/{id:guid}/env/{key}", async (Guid id, string key, OctopusDbContext db, CancellationToken ct) =>
+{
+    if (!await db.Apps.AnyAsync(a => a.Id == id, ct)) return Results.NotFound(new { error = "App not found." });
+    if (!AppEnvVars.ValidateKey(key).IsSuccess) return Results.BadRequest(new { error = "Invalid key." });
+    var entity = await db.AppEnvVars.FindAsync([id, key], ct);
+    if (entity is null) return Results.NotFound(new { error = "Variable not found." });
+    db.AppEnvVars.Remove(entity);
+    await db.SaveChangesAsync(ct);
+    return Results.NoContent();
+});
+
 // ---- Webhooks (GitHub push -> queued deployment) ----
 app.MapPost("/api/apps/{id:guid}/webhook-token", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
 {
@@ -358,3 +418,4 @@ public partial class Program;
 
 public sealed record CreateAppRequest(string? Name, string? RepoUrl, string? Branch, int? ContainerPort);
 public sealed record CreateDeploymentRequest(int? ContainerPort, string? ProjectPath);
+public sealed record SetEnvRequest(Dictionary<string, string>? Vars);
