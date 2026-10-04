@@ -71,6 +71,23 @@ public sealed class DockerRunner
         IReadOnlyDictionary<string, string>? envVars,
         Action<string> log,
         CancellationToken ct)
+        => await StartWithEnvAndQuotaAsync(containerName, imageName, hostPort, containerPort, envVars,
+            FormatMemory(512), FormatCpus(1000), log, ct);
+
+    /// <summary>
+    /// Starts a container with quota flags, injecting env vars via a throwaway
+    /// --env-file so values never appear in process arguments or logs.
+    /// </summary>
+    public async Task<Result<int>> StartWithEnvAndQuotaAsync(
+        string containerName,
+        string imageName,
+        int hostPort,
+        int containerPort,
+        IReadOnlyDictionary<string, string>? envVars,
+        string memory,
+        string cpus,
+        Action<string> log,
+        CancellationToken ct)
     {
         await StopAndRemoveAsync(containerName, log, ct);
 
@@ -84,7 +101,7 @@ public sealed class DockerRunner
             }
 
             // Bind loopback only + resource limits. Container port defaults to 8080 (ASP.NET) but is overridable.
-            var args = BuildStartArgs(containerName, imageName, hostPort, containerPort, envFile);
+            var args = BuildStartArgs(containerName, imageName, hostPort, containerPort, envFile, memory, cpus);
             log("$ docker " + RedactForLog(args));
             var run = await ProcessRunner.RunAsync("docker", args, Environment.CurrentDirectory, TimeSpan.FromMinutes(2), ct);
             AppendLog(log, run.StdOut);
@@ -102,11 +119,20 @@ public sealed class DockerRunner
     }
 
     /// <summary>Builds `docker run` args. Env values are never embedded — only an --env-file path.</summary>
-    public static string BuildStartArgs(string containerName, string imageName, int hostPort, int containerPort, string? envFilePath)
+    public static string BuildStartArgs(
+        string containerName, string imageName, int hostPort, int containerPort, string? envFilePath,
+        string memory = "512m", string cpus = "1.0")
     {
         var envPart = envFilePath is null ? string.Empty : $" --env-file \"{envFilePath}\"";
-        return $"run -d --rm --name \"{containerName}\"{envPart} -p 127.0.0.1:{hostPort}:{containerPort} --memory 512m --cpus 1.0 \"{imageName}\"";
+        return $"run -d --rm --name \"{containerName}\"{envPart} -p 127.0.0.1:{hostPort}:{containerPort} --memory {memory} --cpus {cpus} \"{imageName}\"";
     }
+
+    /// <summary>Docker --memory flag for a validated MB quota. Kept in Runtime so no Apps reference is needed.</summary>
+    public static string FormatMemory(int memoryMb) => $"{memoryMb}m";
+
+    /// <summary>Docker --cpus flag for a validated millicore quota.</summary>
+    public static string FormatCpus(int cpuMillicores) =>
+        (cpuMillicores / 1000.0).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>Serializes validated env vars to docker --env-file format (KEY=VALUE per line).</summary>
     public static string BuildEnvFileContent(IReadOnlyDictionary<string, string> envVars)

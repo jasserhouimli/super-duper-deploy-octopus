@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Octopus.Apps;
 using Octopus.Deployments;
+using Octopus.Runtime;
 
 namespace Octopus.Tests;
 
@@ -83,5 +84,25 @@ public sealed class AppQuotaPersistenceTests : IAsyncLifetime
         var reloaded = await _db.Apps.FindAsync([id]);
         Assert.Equal(256, reloaded!.MaxMemoryMb);
         Assert.Equal(500, reloaded.CpuMillicores);
+    }
+}
+
+public sealed class DockerQuotaArgsTests
+{
+    [Fact]
+    public void Defaults_match_previous_hardcoded_limits()
+    {
+        var args = DockerRunner.BuildStartArgs("c", "img", 5100, 8080, null);
+        Assert.Contains("--memory 512m", args);
+        Assert.Contains("--cpus 1.0", args);
+    }
+
+    [Fact]
+    public void Custom_quota_flows_into_args()
+    {
+        var args = DockerRunner.BuildStartArgs("c", "img", 5100, 8080, null,
+            DockerRunner.FormatMemory(256), DockerRunner.FormatCpus(500));
+        Assert.Contains("--memory 256m", args);
+        Assert.Contains("--cpus 0.5", args);
     }
 }
