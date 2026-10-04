@@ -159,6 +159,26 @@ public sealed class DeploymentWorker(
             await db.SaveChangesAsync(ct);
             if (!start.IsSuccess) throw new InvalidOperationException(start.Error);
 
+            // Health gate: the container must accept TCP on its host port and (when
+            // docker reports state) look healthy. A bad image fails the deployment
+            // instead of being marked Running.
+            Log($"Probing readiness on 127.0.0.1:{port} (30s budget).");
+            var ready = await ContainerHealth.WaitForTcpAsync(
+                port, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1), ct);
+            var inspect = await DockerInspect.InspectAsync(DockerRunner.ContainerName(app.Slug), ct);
+            var inspectHealthy = !inspect.IsSuccess || inspect.Value is null
+                ? (bool?)null // docker gave no usable state: TCP probe decides
+                : DockerInspect.IsHealthy(inspect.Value);
+            if (!ready || inspectHealthy == false)
+            {
+                Log(ready
+                    ? "Readiness failed: container state is not healthy; stopping."
+                    : "Readiness failed: port did not accept connections within 30s; stopping.");
+                await docker.StopAndRemoveAsync(DockerRunner.ContainerName(app.Slug), _ => { }, ct);
+                throw new InvalidOperationException("Container did not become ready within 30s.");
+            }
+            Log("Readiness passed.");
+
             deployment.Status = DeploymentStatus.Running;
             deployment.FinishedAt = DateTimeOffset.UtcNow;
             app.Status = AppStatus.Running;
