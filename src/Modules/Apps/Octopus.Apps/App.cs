@@ -14,6 +14,10 @@ public sealed class App
     public AppStatus Status { get; set; } = AppStatus.Created;
     public int TargetPort { get; set; }
     public string? ContainerName { get; set; }
+    /// <summary>Memory cap in MB (allowlist, see <see cref="AppQuotas"/>).</summary>
+    public int MaxMemoryMb { get; set; } = AppQuotas.DefaultMemoryMb;
+    /// <summary>CPU cap in millicores (allowlist, see <see cref="AppQuotas"/>).</summary>
+    public int CpuMillicores { get; set; } = AppQuotas.DefaultCpuMillicores;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
