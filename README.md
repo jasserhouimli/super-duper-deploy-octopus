@@ -27,7 +27,7 @@ Modules (`src/Modules`): each owns its domain, no cycles.
 | `Apps` | App entity, creation validation, env-var keys/validation | builds, containers, secret values in logs |
 | `Deployments` | Deployment state, logs, webhook intake/idempotency, env-var storage, `OctopusDbContext` | docker, git |
 | `GitHub` | URL validation, shallow clone | deployment state |
-| `Runtime` | build plans, docker build/run/stop (+ `--env-file` injection), port allocation | git, routing, secret values in logs |
+| `Runtime` | build plans, docker build/run/stop (+ `--env-file` injection), readiness probes, port allocation | git, routing, secret values in logs |
 | `Routing` | YARP dynamic config provider | deployment decisions |
 | `BuildingBlocks` | Result, Slug, ProcessRunner | domain rules |
 
@@ -138,6 +138,15 @@ No `Dockerfile`? The worker detects the shallowest `Microsoft.NET.Sdk.Web` proje
 A repo `Dockerfile` always wins. Override per deployment via `projectPath`
 (relative `.csproj`, no `..`).
 
+## Health-gated deploys
+
+After `docker run`, the worker waits up to 30 s for the container to accept TCP
+on its loopback host port (`5100-5999`) and checks `docker inspect` state
+(images with a `HEALTHCHECK` must report `healthy`). A container that never
+becomes ready is stopped and the deployment is marked `Failed` — a bad image
+never becomes the `Running` route. Probes are loopback-only, so there is no
+SSRF surface.
+
 ## API
 
 | Method | Route | Notes |
@@ -189,7 +198,7 @@ Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
 
 1. Postgres + EF Core migrations; ~~per-app env vars (secret references, not values in logs)~~ Done (v0.4).
 2. ~~GitHub webhooks (HMAC, idempotency key) -> auto-deploy.~~ Done (v0.2).
-3. ~~`dotnet` buildpack (no Dockerfile needed)~~ Done (v0.2); next: health-gated traffic switch.
+3. ~~`dotnet` buildpack (no Dockerfile needed)~~ Done (v0.2); ~~health-gated traffic switch~~ Done (v0.4: TCP readiness + inspect gate, bad images fail instead of routing).
 4. ~~CI (build + test + architecture tests + image builds) and compose.~~ Done (v0.3).
 5. Auth (API keys/OIDC), per-app resource quotas, log streaming.
 6. Multi-worker leases/heartbeats, blue/green, custom domains.
@@ -201,5 +210,5 @@ src/Octopus.Api        HTTP + YARP + EF Sqlite wiring
 src/Octopus.Worker     DeploymentWorker (claim -> clone -> build-plan -> build -> start w/ env-file)
 src/Modules/...        Apps (+EnvVars), Deployments (+Webhooks, EnvVar storage), GitHub, Runtime (+Buildpack, env-file), Routing
 src/BuildingBlocks     Result, Slug, ProcessRunner
-tests/Octopus.Tests    validators, webhooks, buildpack, env vars, sqlite ordering, architecture (61 tests)
+tests/Octopus.Tests    validators, webhooks, buildpack, env vars, health probes, sqlite ordering, architecture (82 tests)
 ```
