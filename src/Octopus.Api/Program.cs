@@ -40,8 +40,12 @@ app.MapPost("/api/apps", async (CreateAppRequest req, OctopusDbContext db, Cance
     if (req is null) return Results.BadRequest(new { error = "Body required." });
     var check = AppValidator.Create(req.Name ?? "", req.RepoUrl ?? "", req.Branch ?? "main");
     if (!check.IsSuccess) return Results.BadRequest(new { error = check.Error });
+    var quota = AppQuotas.Validate(req.MemoryMb, req.CpuMillicores);
+    if (!quota.IsSuccess) return Results.BadRequest(new { error = quota.Error });
 
     var entity = check.Value!;
+    entity.MaxMemoryMb = quota.Value.MemoryMb;
+    entity.CpuMillicores = quota.Value.CpuMillicores;
     entity.Slug = await UniqueSlugAsync(db, entity.Slug, ct);
     entity.ContainerName = DockerRunner.ContainerName(entity.Slug);
     if (req.ContainerPort is > 0 and < 65536) { /* stored per-deployment for v0.1 */ }
@@ -198,6 +202,8 @@ static object ToDto(App a) => new
     a.Branch,
     status = a.Status.ToString(),
     a.TargetPort,
+    a.MaxMemoryMb,
+    a.CpuMillicores,
     url = $"/apps/{a.Slug}/",
     a.CreatedAt,
     a.UpdatedAt,
@@ -227,8 +233,21 @@ static void RefreshRoutes(IServiceProvider services, OctopusDbContext db)
     catch { /* best effort */ }
 }
 
-// ---- App env vars (secret references; values never returned or logged) ----
-app.MapGet("/api/apps/{id:guid}/env", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+// ---- App quota (allowlisted memory/cpu caps) ----
+app.MapPut("/api/apps/{id:guid}/quota", async (Guid id, SetQuotaRequest? req, OctopusDbContext db, CancellationToken ct) =>
+{
+    var entity = await db.Apps.FindAsync([id], ct);
+    if (entity is null) return Results.NotFound(new { error = "App not found." });
+    var check = AppQuotas.Validate(req?.MemoryMb, req?.CpuMillicores);
+    if (!check.IsSuccess) return Results.BadRequest(new { error = check.Error });
+    entity.MaxMemoryMb = check.Value.MemoryMb;
+    entity.CpuMillicores = check.Value.CpuMillicores;
+    entity.UpdatedAt = DateTimeOffset.UtcNow;
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(ToDto(entity));
+});
+
+// ---- App env vars (secret references; values never returned or logged) ----app.MapGet("/api/apps/{id:guid}/env", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
 {
     if (!await db.Apps.AnyAsync(a => a.Id == id, ct)) return Results.NotFound(new { error = "App not found." });
     var keys = await db.AppEnvVars.Where(e => e.AppId == id)
@@ -416,6 +435,7 @@ public sealed class RouteRefresher(IServiceProvider services, ILogger<RouteRefre
 // Needed for WebApplicationFactory-style tests if added later.
 public partial class Program;
 
-public sealed record CreateAppRequest(string? Name, string? RepoUrl, string? Branch, int? ContainerPort);
+public sealed record CreateAppRequest(string? Name, string? RepoUrl, string? Branch, int? ContainerPort, int? MemoryMb, int? CpuMillicores);
 public sealed record CreateDeploymentRequest(int? ContainerPort, string? ProjectPath);
+public sealed record SetQuotaRequest(int? MemoryMb, int? CpuMillicores);
 public sealed record SetEnvRequest(Dictionary<string, string>? Vars);

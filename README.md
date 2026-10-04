@@ -152,7 +152,8 @@ SSRF surface.
 | Method | Route | Notes |
 |---|---|---|
 | GET | `/health` | liveness |
-| POST | `/api/apps` | `{name, repoUrl, branch?, containerPort?}` |
+| POST | `/api/apps` | `{name, repoUrl, branch?, containerPort?, memoryMb?, cpuMillicores?}` |
+| PUT | `/api/apps/{id}/quota` | `{memoryMb?, cpuMillicores?}` — allowlisted caps |
 | GET | `/api/apps` | list |
 | GET | `/api/apps/{id}` | one |
 | DELETE | `/api/apps/{id}` | stops container, deletes history + webhooks |
@@ -181,7 +182,8 @@ Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
   docker `--env-file` (never in `docker run -e` args), list endpoints return key
   names only, logs record key names/count only. Keys `^[A-Za-z_][A-Za-z0-9_]*$`
   (max 64), values max 8 KB without NUL/newlines, max 50 vars / 64 KB per app.
-- Containers: bound to `127.0.0.1` only, `--memory 512m --cpus 1.0`, fixed host-port range `5100-5999`.
+- Containers: bound to `127.0.0.1` only, per-app quotas (memory `128/256/512/1024/2048` MB,
+  CPU `250/500/1000/2000` millicores; defaults `512`/`1000`), fixed host-port range `5100-5999`.
 - Process timeouts everywhere (clone 2m, build 10m, run 2m); log output truncated.
 - Payload limits: names/branches/URLs/paths length-checked; logs capped per-line and per-query.
 
@@ -200,7 +202,7 @@ Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
 2. ~~GitHub webhooks (HMAC, idempotency key) -> auto-deploy.~~ Done (v0.2).
 3. ~~`dotnet` buildpack (no Dockerfile needed)~~ Done (v0.2); ~~health-gated traffic switch~~ Done (v0.4: TCP readiness + inspect gate, bad images fail instead of routing).
 4. ~~CI (build + test + architecture tests + image builds) and compose.~~ Done (v0.3).
-5. Auth (API keys/OIDC), per-app resource quotas, log streaming.
+5. Auth (API keys/OIDC), log streaming.
 6. Multi-worker leases/heartbeats, blue/green, custom domains.
 
 ## Repo layout

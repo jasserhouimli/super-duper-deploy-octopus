@@ -154,8 +154,11 @@ public sealed class DeploymentWorker(
                 ? app.TargetPort
                 : PortAllocator.FindFreePort(new HashSet<int>(taken));
 
-            var start = await docker.StartWithEnvAsync(
-                DockerRunner.ContainerName(app.Slug), image, port, deployment.ContainerPort, await LoadEnvAsync(db, app.Id, ct), Log, ct);
+            var start = await docker.StartWithEnvAndQuotaAsync(
+                DockerRunner.ContainerName(app.Slug), image, port, deployment.ContainerPort,
+                await LoadEnvAsync(db, app.Id, ct),
+                DockerRunner.FormatMemory(app.MaxMemoryMb), DockerRunner.FormatCpus(app.CpuMillicores),
+                Log, ct);
             await db.SaveChangesAsync(ct);
             if (!start.IsSuccess) throw new InvalidOperationException(start.Error);
 
