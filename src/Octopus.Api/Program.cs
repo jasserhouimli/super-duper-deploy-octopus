@@ -236,6 +236,62 @@ static void RefreshRoutes(IServiceProvider services, OctopusDbContext db)
     catch { /* best effort */ }
 }
 
+// ---- API keys (control-plane auth; raw key shown once, hash-only storage) ----
+app.MapPost("/api/keys", async (CreateKeyRequest? req, OctopusDbContext db, CancellationToken ct) =>
+{
+    Octopus.Deployments.ApiKeys.ApiKeyHasher.GeneratedKey gen;
+    try
+    {
+        gen = Octopus.Deployments.ApiKeys.ApiKeyHasher.Generate(req?.Name ?? "");
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    var key = new Octopus.Deployments.ApiKeys.ApiKey
+    {
+        Id = Guid.NewGuid(),
+        Name = (req?.Name ?? "").Trim(),
+        KeyPrefix = gen.KeyPrefix,
+        KeyHash = gen.KeyHash,
+        CreatedAt = DateTimeOffset.UtcNow,
+    };
+    db.ApiKeys.Add(key);
+    await db.SaveChangesAsync(ct);
+    return Results.Created($"/api/keys/{key.Id}", new
+    {
+        key.Id,
+        key.Name,
+        key.KeyPrefix,
+        key = gen.RawKey, // shown once: never stored, never returned again
+        key.CreatedAt,
+    });
+});
+
+app.MapGet("/api/keys", async (OctopusDbContext db, CancellationToken ct) =>
+{
+    // NOTE: SQLite cannot ORDER BY DateTimeOffset server-side; sort in memory.
+    var keys = await db.ApiKeys.ToListAsync(ct);
+    return Results.Ok(keys.OrderByDescending(k => k.CreatedAt).Select(k => new
+    {
+        k.Id,
+        k.Name,
+        k.KeyPrefix,
+        k.CreatedAt,
+        k.RevokedAt,
+        k.LastUsedAt,
+    }).ToList());
+});
+
+app.MapPost("/api/keys/{id:guid}/revoke", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+{
+    var key = await db.ApiKeys.FindAsync([id], ct);
+    if (key is null) return Results.NotFound(new { error = "Key not found." });
+    key.RevokedAt ??= DateTimeOffset.UtcNow;
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { key.Id, key.Name, key.KeyPrefix, key.CreatedAt, key.RevokedAt });
+});
+
 // ---- App quota (allowlisted memory/cpu caps) ----
 app.MapPut("/api/apps/{id:guid}/quota", async (Guid id, SetQuotaRequest? req, OctopusDbContext db, CancellationToken ct) =>
 {
@@ -441,4 +497,5 @@ public partial class Program;
 public sealed record CreateAppRequest(string? Name, string? RepoUrl, string? Branch, int? ContainerPort, int? MemoryMb, int? CpuMillicores);
 public sealed record CreateDeploymentRequest(int? ContainerPort, string? ProjectPath);
 public sealed record SetQuotaRequest(int? MemoryMb, int? CpuMillicores);
+public sealed record CreateKeyRequest(string? Name);
 public sealed record SetEnvRequest(Dictionary<string, string>? Vars);

@@ -63,6 +63,11 @@ dotnet test Octopus.slnx
 # Terminal 1 — API (http://localhost:5000)
 dotnet run --project src/Octopus.Api
 
+# First call ever: bootstrap an API key (shown once — save it):
+# $key = Invoke-RestMethod -Method Post -Uri http://localhost:5000/api/keys `
+#   -ContentType application/json -Body '{"name":"admin"}'
+# $h = @{ Authorization = "Bearer $($key.key)" }  # use on all /api calls below
+
 # Terminal 2 — worker (must share the same connection string / DB file)
 $env:ConnectionStrings__Octopus = "Data Source=C:\data\octopus.db"
 dotnet run --project src/Octopus.Api    # same env in terminal 1
@@ -163,6 +168,9 @@ SSRF surface.
 | GET | `/api/deployments/{id}/logs?take=200` | bounded log tail |
 | POST | `/api/apps/{id}/stop` | docker stop + mark Stopped |
 | POST | `/api/apps/{id}/webhook-token` | create/rotate secret (shown once) |
+| POST | `/api/keys` | create API key `{name}`; raw key shown once |
+| GET | `/api/keys` | list keys (prefixes only, never hashes) |
+| POST | `/api/keys/{id}/revoke` | revoke a key |
 | GET | `/api/apps/{id}/webhook-events?take=50` | delivery receipts |
 | GET | `/api/apps/{id}/env` | list env key names only (values never returned) |
 | PUT | `/api/apps/{id}/env` | replace env set `{vars:{KEY:value}}`; max 50 vars, 8 KB/value, 64 KB total |
@@ -173,6 +181,11 @@ Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
 
 ## Security (enforced)
 
+- Control API auth: `Authorization: Bearer oct_...` on all `/api` routes except
+  `/health` and the HMAC-authenticated GitHub receiver. Keys are `oct_` +
+  base64url(32 bytes); only SHA-256 hashes are stored (constant-time verify).
+  Bootstrap: with zero active keys, `POST /api/keys {name}` is allowed once
+  to create the first key; afterwards it requires auth like everything else. List/revoke expose prefixes only.
 - `repoUrl`: `https://github.com/owner/repo` only; credentials rejected; length-bounded.
 - Webhooks: HMAC-SHA256 with constant-time compare; 1 MB payload cap; unauthenticated
   payloads are never persisted; secrets live in the control-plane DB, returned only
