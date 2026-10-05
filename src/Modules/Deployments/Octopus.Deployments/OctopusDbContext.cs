@@ -16,6 +16,7 @@ public sealed class OctopusDbContext(DbContextOptions<OctopusDbContext> options)
     public DbSet<WebhookEvent> WebhookEvents => Set<WebhookEvent>();
     public DbSet<AppWebhook> AppWebhooks => Set<AppWebhook>();
     public DbSet<AppEnvVar> AppEnvVars => Set<AppEnvVar>();
+    public DbSet<ApiKeys.ApiKey> ApiKeys => Set<ApiKeys.ApiKey>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -66,6 +67,14 @@ public sealed class OctopusDbContext(DbContextOptions<OctopusDbContext> options)
             e.HasIndex(x => x.AppId);
             e.Property(x => x.Key).HasMaxLength(64).IsRequired();
             e.Property(x => x.Value).HasMaxLength(8192).IsRequired();
+        });
+        b.Entity<ApiKeys.ApiKey>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.KeyHash).IsUnique();
+            e.Property(x => x.Name).HasMaxLength(80).IsRequired();
+            e.Property(x => x.KeyPrefix).HasMaxLength(16).IsRequired();
+            e.Property(x => x.KeyHash).HasMaxLength(64).IsRequired();
         });
     }
 }

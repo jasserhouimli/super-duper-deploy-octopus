@@ -48,6 +48,16 @@ public static class DbBootstrap
                 CONSTRAINT "PK_AppEnvVars" PRIMARY KEY ("AppId", "Key")
             );
             CREATE INDEX IF NOT EXISTS "IX_AppEnvVars_AppId" ON "AppEnvVars" ("AppId");
+            CREATE TABLE IF NOT EXISTS "ApiKeys" (
+                "Id" TEXT NOT NULL CONSTRAINT "PK_ApiKeys" PRIMARY KEY,
+                "Name" TEXT NOT NULL,
+                "KeyPrefix" TEXT NOT NULL,
+                "KeyHash" TEXT NOT NULL,
+                "CreatedAt" TEXT NOT NULL,
+                "RevokedAt" TEXT NULL,
+                "LastUsedAt" TEXT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_ApiKeys_KeyHash" ON "ApiKeys" ("KeyHash");
             """);
 
         if (!ColumnExists(db, "Deployments", "ProjectPath"))
