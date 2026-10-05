@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Octopus.Api;
 using Octopus.Apps;
 using Octopus.Deployments;
 using Octopus.Deployments.Webhooks;
@@ -33,6 +34,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTimeOffset.UtcNow }));
+
+app.UseApiKeyAuth();
 
 // ---- Apps ----
 app.MapPost("/api/apps", async (CreateAppRequest req, OctopusDbContext db, CancellationToken ct) =>
