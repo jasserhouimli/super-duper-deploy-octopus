@@ -24,4 +24,20 @@ public static class DeploymentQueries
         var rows = await db.WebhookEvents.Where(e => e.AppId == appId).Take(5000).ToListAsync(ct);
         return rows.OrderByDescending(e => e.ReceivedAt).Take(Math.Clamp(max, 1, 200)).ToList();
     }
+
+    /// <summary>
+    /// Ascending log tail for polling/streaming. `afterId` is an exclusive
+    /// cursor (0 = from the start); `take` is clamped to keep queries bounded.
+    /// Ordering by the integer PK is server-side and SQLite-safe.
+    /// </summary>
+    public static async Task<List<DeploymentLog>> ListLogsAsync(
+        OctopusDbContext db, Guid deploymentId, long afterId = 0, int take = 200, CancellationToken ct = default)
+    {
+        var n = Math.Clamp(take, 1, 1000);
+        return await db.DeploymentLogs
+            .Where(l => l.DeploymentId == deploymentId && l.Id > afterId)
+            .OrderBy(l => l.Id)
+            .Take(n)
+            .ToListAsync(ct);
+    }
 }
