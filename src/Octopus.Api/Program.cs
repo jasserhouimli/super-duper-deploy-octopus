@@ -254,6 +254,30 @@ app.MapPost("/api/deployments/{id:guid}/cancel", async (Guid id, OctopusDbContex
     return Results.Ok(new { deployment.Id, status = deployment.Status.ToString() });
 });
 
+app.MapPost("/api/deployments/{id:guid}/retry", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+{
+    var deployment = await db.Deployments.FindAsync([id], ct);
+    if (deployment is null) return Results.NotFound(new { error = "Deployment not found." });
+
+    var pending = await db.Deployments.AnyAsync(
+        d => d.AppId == deployment.AppId && d.Id != deployment.Id
+            && (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Cloning || d.Status == DeploymentStatus.Building || d.Status == DeploymentStatus.Starting), ct);
+    if (pending) return Results.Conflict(new { error = "A deployment is already in progress for this app." });
+
+    var check = DeploymentActions.Retry(deployment, DateTimeOffset.UtcNow);
+    if (!check.IsSuccess) return Results.Conflict(new { error = check.Error });
+
+    db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Line = check.Value! });
+    var app = await db.Apps.FindAsync([deployment.AppId], ct);
+    if (app is not null)
+    {
+        app.Status = AppStatus.Deploying;
+        app.UpdatedAt = DateTimeOffset.UtcNow;
+    }
+    await db.SaveChangesAsync(ct);
+    return Results.Accepted($"/api/deployments/{deployment.Id}", new { deployment.Id, status = deployment.Status.ToString() });
+});
+
 app.MapPost("/api/apps/{id:guid}/stop", async (Guid id, OctopusDbContext db, ILogger<Program> log, CancellationToken ct) =>
 {
     var entity = await db.Apps.FindAsync([id], ct);

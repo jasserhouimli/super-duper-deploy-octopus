@@ -20,4 +20,21 @@ public static class DeploymentActions
         deployment.FinishedAt = now;
         return Result<string>.Ok("Cancelled by user.");
     }
+
+    /// <summary>
+    /// Re-queues a Failed or Cancelled deployment as a fresh attempt on the
+    /// same record: attempt history stays in the log tail, prior outcome fields
+    /// are cleared for the next run.
+    /// </summary>
+    public static Result<string> Retry(Deployment deployment, DateTimeOffset now)
+    {
+        if (deployment.Status is not (DeploymentStatus.Failed or DeploymentStatus.Cancelled))
+            return Result<string>.Fail($"Only failed or cancelled deployments can be retried (current: {deployment.Status}).");
+        deployment.Status = DeploymentStatus.Queued;
+        deployment.Error = null;
+        deployment.CommitSha = null;
+        deployment.StartedAt = null;
+        deployment.FinishedAt = null;
+        return Result<string>.Ok($"Requeued for retry at {now:O}.");
+    }
 }

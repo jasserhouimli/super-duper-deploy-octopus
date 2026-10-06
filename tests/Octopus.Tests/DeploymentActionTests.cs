@@ -31,4 +31,43 @@ public sealed class DeploymentActionTests
         Assert.Equal(status, d.Status);
         Assert.Null(d.FinishedAt);
     }
+
+    [Theory]
+    [InlineData(DeploymentStatus.Failed)]
+    [InlineData(DeploymentStatus.Cancelled)]
+    public void Retry_requeues_terminal_attempts(DeploymentStatus status)
+    {
+        var d = new Deployment
+        {
+            Id = Guid.NewGuid(),
+            AppId = Guid.NewGuid(),
+            Status = status,
+            Error = "boom",
+            CommitSha = "abc",
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+            FinishedAt = DateTimeOffset.UtcNow,
+        };
+        var r = DeploymentActions.Retry(d, DateTimeOffset.UtcNow);
+        Assert.True(r.IsSuccess);
+        Assert.Equal(DeploymentStatus.Queued, d.Status);
+        Assert.Null(d.Error);
+        Assert.Null(d.CommitSha);
+        Assert.Null(d.StartedAt);
+        Assert.Null(d.FinishedAt);
+    }
+
+    [Theory]
+    [InlineData(DeploymentStatus.Queued)]
+    [InlineData(DeploymentStatus.Cloning)]
+    [InlineData(DeploymentStatus.Building)]
+    [InlineData(DeploymentStatus.Starting)]
+    [InlineData(DeploymentStatus.Running)]
+    [InlineData(DeploymentStatus.Stopped)]
+    public void Retry_rejects_non_retryable(DeploymentStatus status)
+    {
+        var d = new Deployment { Id = Guid.NewGuid(), AppId = Guid.NewGuid(), Status = status, Error = "x" };
+        var r = DeploymentActions.Retry(d, DateTimeOffset.UtcNow);
+        Assert.False(r.IsSuccess);
+        Assert.Equal(status, d.Status);
+    }
 }
