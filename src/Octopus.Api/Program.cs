@@ -289,6 +289,15 @@ app.MapPost("/api/apps/{id:guid}/stop", async (Guid id, OctopusDbContext db, ILo
     var running = (await db.Deployments.Where(d => d.AppId == id && d.Status == DeploymentStatus.Running)
         .ToListAsync(ct)).OrderByDescending(d => d.CreatedAt).FirstOrDefault();
     if (running is not null) { running.Status = DeploymentStatus.Stopped; running.FinishedAt = DateTimeOffset.UtcNow; }
+    // Stop also cancels queued deployments so the worker cannot start a new
+    // container for a stopped app. Already-claimed attempts run to completion
+    // (v1 has no worker interruption) and are left untouched.
+    var queued = await db.Deployments.Where(d => d.AppId == id && d.Status == DeploymentStatus.Queued).ToListAsync(ct);
+    foreach (var q in queued)
+    {
+        if (DeploymentActions.Cancel(q, DateTimeOffset.UtcNow).IsSuccess)
+            db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = q.Id, Line = "Cancelled: app stopped." });
+    }
     await db.SaveChangesAsync(ct);
     RefreshRoutes(app.Services, db);
     return Results.Ok(ToDto(entity));

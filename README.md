@@ -114,8 +114,14 @@ Invoke-RestMethod "http://localhost:5000/api/deployments/$dep/logs?take=200" -He
 Stop:
 
 ```powershell
-Invoke-RestMethod -Method Post "http://localhost:5000/api/apps/$($app.id)/stop"
+Invoke-RestMethod -Method Post "http://localhost:5000/api/apps/$($app.id)/stop" -Headers $h
 ```
+
+Stop halts the container and cancels queued deployments for the app. An
+attempt the worker already claimed runs to completion (v1 has no worker
+interruption); cancel a queued deployment any time with
+`POST /api/deployments/{id}/cancel`, and requeue a failed one with
+`POST /api/deployments/{id}/retry`.
 
 ## GitHub webhook auto-deploy
 
@@ -167,6 +173,8 @@ SSRF surface.
 | POST | `/api/apps/{id}/deployments` | `{containerPort?, projectPath?}`; `202`, `409` if one in progress |
 | GET | `/api/apps/{id}/deployments` | last 50 |
 | GET | `/api/deployments/{id}` | one |
+| POST | `/api/deployments/{id}/cancel` | cancel a queued deployment (`409` once claimed) |
+| POST | `/api/deployments/{id}/retry` | requeue a failed/cancelled deployment (`202`, `409` if one in progress) |
 | GET | `/api/deployments/{id}/logs?take=200` | bounded log tail |
 | GET | `/api/deployments/{id}/logs/stream?afterId=0` | SSE stream: replay then live lines, `event: done` at terminal state (5 min cap) |
 | POST | `/api/apps/{id}/stop` | docker stop + mark Stopped |
