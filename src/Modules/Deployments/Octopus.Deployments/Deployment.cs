@@ -24,6 +24,7 @@ public enum DeploymentStatus
     Running = 4,
     Failed = 5,
     Stopped = 6,
+    Cancelled = 7,
 }
 
 public sealed class DeploymentLog

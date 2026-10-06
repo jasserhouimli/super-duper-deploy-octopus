@@ -227,6 +227,33 @@ app.MapGet("/api/deployments/{id:guid}/logs/stream", async (
     catch (OperationCanceledException) { /* client went away */ }
 });
 
+app.MapPost("/api/deployments/{id:guid}/cancel", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+{
+    var deployment = await db.Deployments.FindAsync([id], ct);
+    if (deployment is null) return Results.NotFound(new { error = "Deployment not found." });
+
+    var now = DateTimeOffset.UtcNow;
+    var check = DeploymentActions.Cancel(deployment, now);
+    if (!check.IsSuccess) return Results.Conflict(new { error = check.Error });
+
+    db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Line = check.Value! });
+    var app = await db.Apps.FindAsync([deployment.AppId], ct);
+    if (app is not null && app.Status == AppStatus.Deploying)
+    {
+        // v1 has no previous-state memory: restore Running when a live deploy
+        // exists, stay Deploying while siblings are pending, else idle.
+        var siblings = await db.Deployments.Where(d => d.AppId == app.Id && d.Id != deployment.Id).ToListAsync(ct);
+        app.Status = siblings.Any(d => d.Status == DeploymentStatus.Running)
+            ? AppStatus.Running
+            : siblings.Any(d => d.Status is DeploymentStatus.Queued or DeploymentStatus.Cloning or DeploymentStatus.Building or DeploymentStatus.Starting)
+                ? AppStatus.Deploying
+                : AppStatus.Created;
+        app.UpdatedAt = now;
+    }
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { deployment.Id, status = deployment.Status.ToString() });
+});
+
 app.MapPost("/api/apps/{id:guid}/stop", async (Guid id, OctopusDbContext db, ILogger<Program> log, CancellationToken ct) =>
 {
     var entity = await db.Apps.FindAsync([id], ct);
