@@ -105,8 +105,10 @@ Invoke-RestMethod http://localhost:5000/api/apps
 Logs:
 
 ```powershell
-$dep = (Invoke-RestMethod "http://localhost:5000/api/apps/$($app.id)/deployments")[0].id
-Invoke-RestMethod "http://localhost:5000/api/deployments/$dep/logs?take=200"
+$dep = (Invoke-RestMethod "http://localhost:5000/api/apps/$($app.id)/deployments" -Headers $h)[0].id
+Invoke-RestMethod "http://localhost:5000/api/deployments/$dep/logs?take=200" -Headers $h
+# live tail (SSE, needs an authenticated client; curl example):
+# curl -N -H "Authorization: Bearer $OCTOPUS_KEY" "http://localhost:5000/api/deployments/$dep/logs/stream"
 ```
 
 Stop:
@@ -166,6 +168,7 @@ SSRF surface.
 | GET | `/api/apps/{id}/deployments` | last 50 |
 | GET | `/api/deployments/{id}` | one |
 | GET | `/api/deployments/{id}/logs?take=200` | bounded log tail |
+| GET | `/api/deployments/{id}/logs/stream?afterId=0` | SSE stream: replay then live lines, `event: done` at terminal state (5 min cap) |
 | POST | `/api/apps/{id}/stop` | docker stop + mark Stopped |
 | POST | `/api/apps/{id}/webhook-token` | create/rotate secret (shown once) |
 | POST | `/api/keys` | create API key `{name}`; raw key shown once |
@@ -215,7 +218,7 @@ Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
 2. ~~GitHub webhooks (HMAC, idempotency key) -> auto-deploy.~~ Done (v0.2).
 3. ~~`dotnet` buildpack (no Dockerfile needed)~~ Done (v0.2); ~~health-gated traffic switch~~ Done (v0.4: TCP readiness + inspect gate, bad images fail instead of routing).
 4. ~~CI (build + test + architecture tests + image builds) and compose.~~ Done (v0.3).
-5. Auth (API keys/OIDC), log streaming.
+5. ~~API-key auth~~ Done (v0.5); ~~log streaming~~ Done (v0.5: cursor tail + SSE stream). OIDC is future.
 6. Multi-worker leases/heartbeats, blue/green, custom domains.
 
 ## Repo layout

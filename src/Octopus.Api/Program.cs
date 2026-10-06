@@ -180,6 +180,53 @@ app.MapGet("/api/deployments/{id:guid}/logs", async (Guid id, int? take, Octopus
     return Results.Ok(logs.Select(l => new { l.At, l.Line }));
 });
 
+app.MapGet("/api/deployments/{id:guid}/logs/stream", async (
+    Guid id, long? afterId, HttpContext ctx, OctopusDbContext db, CancellationToken ct) =>
+{
+    var deployment = await db.Deployments.FindAsync([id], ct);
+    if (deployment is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        await ctx.Response.WriteAsJsonAsync(new { error = "Deployment not found." }, ct);
+        return;
+    }
+
+    ctx.Response.ContentType = "text/event-stream";
+    ctx.Response.Headers.CacheControl = "no-cache";
+    var cursor = Math.Max(0, afterId ?? 0);
+    var deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+
+    static string Frame(object payload) =>
+        "data: " + System.Text.Json.JsonSerializer.Serialize(payload) + "\n\n";
+
+    try
+    {
+        while (!ct.IsCancellationRequested && DateTimeOffset.UtcNow < deadline)
+        {
+            var batch = await DeploymentQueries.ListLogsAsync(db, id, cursor, 200, ct);
+            foreach (var l in batch)
+            {
+                await ctx.Response.WriteAsync(Frame(new { l.Id, l.At, l.Line }), ct);
+                cursor = l.Id;
+            }
+            await ctx.Response.Body.FlushAsync(ct);
+
+            var fresh = await db.Deployments.FindAsync([id], ct);
+            var terminal = fresh is null
+                || fresh.Status is DeploymentStatus.Running or DeploymentStatus.Failed or DeploymentStatus.Stopped;
+            if (terminal && batch.Count == 0)
+                break;
+            if (terminal)
+                continue; // drain remaining lines without waiting
+            try { await Task.Delay(TimeSpan.FromSeconds(1), ct); }
+            catch (OperationCanceledException) { break; }
+        }
+        await ctx.Response.WriteAsync("event: done\ndata: {}\n\n", ct);
+        await ctx.Response.Body.FlushAsync(ct);
+    }
+    catch (OperationCanceledException) { /* client went away */ }
+});
+
 app.MapPost("/api/apps/{id:guid}/stop", async (Guid id, OctopusDbContext db, ILogger<Program> log, CancellationToken ct) =>
 {
     var entity = await db.Apps.FindAsync([id], ct);
