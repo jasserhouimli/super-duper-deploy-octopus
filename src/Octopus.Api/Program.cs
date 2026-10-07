@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Octopus.Api;
 using Octopus.Apps;
@@ -21,6 +23,25 @@ builder.Services.AddSingleton<IProxyConfigProvider>(sp => sp.GetRequiredService<
 builder.Services.AddReverseProxy();
 builder.Services.AddHostedService<RouteRefresher>();
 
+// Abuse guard for unauthenticated entry points: GitHub redeliveries and key
+// creation attempts share one fixed window each (single instance, in-memory).
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddFixedWindowLimiter("webhooks", o =>
+    {
+        o.PermitLimit = 120;
+        o.Window = TimeSpan.FromMinutes(1);
+        o.QueueLimit = 0;
+    });
+    options.AddFixedWindowLimiter("keys", o =>
+    {
+        o.PermitLimit = 30;
+        o.Window = TimeSpan.FromMinutes(1);
+        o.QueueLimit = 0;
+    });
+});
+
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
@@ -36,6 +57,7 @@ if (app.Environment.IsDevelopment())
 app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTimeOffset.UtcNow }));
 
 app.UseApiKeyAuth();
+app.UseRateLimiter();
 
 // ---- Apps ----
 app.MapPost("/api/apps", async (CreateAppRequest req, OctopusDbContext db, CancellationToken ct) =>
@@ -380,7 +402,7 @@ app.MapPost("/api/keys", async (CreateKeyRequest? req, OctopusDbContext db, Canc
         key = gen.RawKey, // shown once: never stored, never returned again
         key.CreatedAt,
     });
-});
+}).RequireRateLimiting("keys");
 
 app.MapGet("/api/keys", async (OctopusDbContext db, CancellationToken ct) =>
 {
@@ -420,7 +442,8 @@ app.MapPut("/api/apps/{id:guid}/quota", async (Guid id, SetQuotaRequest? req, Oc
     return Results.Ok(ToDto(entity));
 });
 
-// ---- App env vars (secret references; values never returned or logged) ----app.MapGet("/api/apps/{id:guid}/env", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+// ---- App env vars (secret references; values never returned or logged) ----
+app.MapGet("/api/apps/{id:guid}/env", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
 {
     if (!await db.Apps.AnyAsync(a => a.Id == id, ct)) return Results.NotFound(new { error = "App not found." });
     var keys = await db.AppEnvVars.Where(e => e.AppId == id)
@@ -559,7 +582,7 @@ app.MapPost("/api/hooks/github/{id:guid}", async (Guid id, HttpContext ctx, Octo
         WebhookOutcome.Conflict => Results.Conflict(new { error = result.Message }),
         _ => Results.BadRequest(new { error = result.Message }),
     };
-});
+}).RequireRateLimiting("webhooks");
 
 app.MapReverseProxy();
 app.Run();
