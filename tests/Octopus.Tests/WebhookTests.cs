@@ -122,4 +122,27 @@ public sealed class WebhookServiceTests : IAsyncLifetime
         var r = await SendAsync("ping", "d-7", """{"zen":"hi"}""");
         Assert.Equal(WebhookOutcome.Ping, r.Outcome);
     }
+
+    [Fact]
+    public async Task Receipts_are_pruned_to_newest_200()
+    {
+        var now = DateTimeOffset.UtcNow;
+        for (var i = 0; i < 205; i++)
+            _db.WebhookEvents.Add(new WebhookEvent
+            {
+                Id = Guid.NewGuid(),
+                AppId = _appId,
+                DeliveryId = $"old-{i}",
+                EventType = "push",
+                PayloadHash = "h",
+                ReceivedAt = now.AddMinutes(-i),
+            });
+        await _db.SaveChangesAsync();
+
+        var r = await SendAsync("ping", "d-8", """{"zen":"hi"}""");
+        Assert.Equal(WebhookOutcome.Ping, r.Outcome);
+        // 205 seeded + 1 new − 5 pruned (prune runs before the new receipt).
+        Assert.Equal(201, await _db.WebhookEvents.CountAsync(e => e.AppId == _appId));
+        Assert.Equal(1, await _db.WebhookEvents.CountAsync(e => e.DeliveryId == "d-8"));
+    }
 }

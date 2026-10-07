@@ -49,6 +49,9 @@ public static class WebhookService
         if (!GitHubSignature.Verify(sub.Secret, rawBody, signature))
             return new WebhookResult(WebhookOutcome.Unauthorized, Message: "Invalid X-Hub-Signature-256.");
 
+        // Retention: receipts are observability, not history — cap per app.
+        await DeploymentQueries.PruneWebhookEventsAsync(db, appId, ct: ct);
+
         // Idempotency: same delivery twice (GitHub redelivery) must not enqueue twice.
         var existing = await db.WebhookEvents
             .FirstOrDefaultAsync(e => e.AppId == appId && e.DeliveryId == deliveryId, ct);

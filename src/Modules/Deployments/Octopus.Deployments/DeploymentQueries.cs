@@ -29,6 +29,22 @@ public static class DeploymentQueries
     }
 
     /// <summary>
+    /// Retention for webhook receipts: keeps the newest <paramref name="keepLast"/>
+    /// per app (matching the list window). Returns the number of pruned events.
+    /// </summary>
+    public static async Task<int> PruneWebhookEventsAsync(
+        OctopusDbContext db, Guid appId, int keepLast = 200, CancellationToken ct = default)
+    {
+        var keep = Math.Clamp(keepLast, 1, 1000);
+        var rows = await db.WebhookEvents.Where(e => e.AppId == appId).Take(5000).ToListAsync(ct);
+        var stale = rows.OrderByDescending(e => e.ReceivedAt).Skip(keep).ToList();
+        if (stale.Count == 0) return 0;
+        db.WebhookEvents.RemoveRange(stale);
+        await db.SaveChangesAsync(ct);
+        return stale.Count;
+    }
+
+    /// <summary>
     /// Retention: keeps the newest <paramref name="keepLast"/> deployments per
     /// app (matching the list window) and deletes older ones with their logs.
     /// Returns the number of pruned deployments.
