@@ -10,6 +10,10 @@ public sealed class Deployment
     public int ContainerPort { get; set; } = 8080;
     /// <summary>Optional override for the dotnet buildpack (relative .csproj path). Null = auto-detect.</summary>
     public string? ProjectPath { get; set; }
+    /// <summary>Worker holding the claim (machine:pid), null when unclaimed.</summary>
+    public string? LeaseOwner { get; set; }
+    /// <summary>Claim expiry, renewed by heartbeat. Concurrency token: a lost race throws instead of double-claiming.</summary>
+    public DateTimeOffset? LeaseExpiresAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? FinishedAt { get; set; }

@@ -17,6 +17,20 @@ public sealed class DeploymentWorker(
     IConfiguration config,
     ILogger<DeploymentWorker> log) : BackgroundService
 {
+    /// <summary>How long a claim lasts without a heartbeat (see heartbeat loop in RunDeploymentAsync).</summary>
+    internal static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
+
+    internal static string WorkerId { get; } =
+        ResolveWorkerId();
+
+    private static string ResolveWorkerId()
+    {
+        var configured = Environment.GetEnvironmentVariable("Octopus__WorkerId");
+        if (!string.IsNullOrWhiteSpace(configured) && configured.Length <= 100)
+            return configured.Trim();
+        return $"{Environment.MachineName}:{Environment.ProcessId}";
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await RecoverStaleAsync(stoppingToken);
@@ -73,11 +87,23 @@ public sealed class DeploymentWorker(
             .ToListAsync(ct)).OrderBy(d => d.CreatedAt).FirstOrDefault();
         if (next is null) return null;
 
-        // v0.1 single-claimer: mark Cloning immediately. Multi-worker needs a lease column + atomic UPDATE.
+        // Lease claim: LeaseExpiresAt is a concurrency token, so two workers
+        // racing the same row resolve to exactly one winner (the loser gets
+        // DbUpdateConcurrencyException and retries on the next poll).
         next.Status = DeploymentStatus.Cloning;
         next.StartedAt = DateTimeOffset.UtcNow;
-        db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = next.Id, Line = "Claimed by worker." });
-        await db.SaveChangesAsync(ct);
+        next.LeaseOwner = WorkerId;
+        next.LeaseExpiresAt = DateTimeOffset.UtcNow.Add(LeaseDuration);
+        db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = next.Id, Line = $"Claimed by worker {WorkerId}." });
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            log.LogDebug("Lost claim race for deployment {Id}.", next.Id);
+            return null;
+        }
         return (next.Id, next.AppId);
     }
 

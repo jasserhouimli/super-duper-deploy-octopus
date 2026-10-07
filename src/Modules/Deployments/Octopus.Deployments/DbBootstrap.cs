@@ -62,6 +62,10 @@ public static class DbBootstrap
 
         if (!ColumnExists(db, "Deployments", "ProjectPath"))
             db.Database.ExecuteSqlRaw("""ALTER TABLE "Deployments" ADD COLUMN "ProjectPath" TEXT NULL;""");
+        if (!ColumnExists(db, "Deployments", "LeaseOwner"))
+            db.Database.ExecuteSqlRaw("""ALTER TABLE "Deployments" ADD COLUMN "LeaseOwner" TEXT NULL;""");
+        if (!ColumnExists(db, "Deployments", "LeaseExpiresAt"))
+            db.Database.ExecuteSqlRaw("""ALTER TABLE "Deployments" ADD COLUMN "LeaseExpiresAt" TEXT NULL;""");
         if (!ColumnExists(db, "Apps", "MaxMemoryMb"))
             db.Database.ExecuteSqlRaw("""ALTER TABLE "Apps" ADD COLUMN "MaxMemoryMb" INTEGER NOT NULL DEFAULT 512;""");
         if (!ColumnExists(db, "Apps", "CpuMillicores"))
