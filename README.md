@@ -216,7 +216,10 @@ the worker prunes older records when a deployment reaches a terminal state.
 
 ## Known limits (honest)
 
-- Single worker claim (no lease); run one worker replica for now.
+- Claims are lease-based (2 min, 30 s heartbeat, optimistic-concurrency races
+  resolve to one winner); a restarting worker only requeues deployments whose
+  lease lapsed. Concurrent builds still share one Docker host, so run one worker
+  per host for now.
 - SQLite + `DbBootstrap` (no real migrations yet); Postgres + EF migrations are next.
 - No auth on the control API, no private repos, no custom domains, no env-var secrets store yet.
 - Stale `Cloning/Building/Starting` deployments are requeued on worker restart.
@@ -230,14 +233,14 @@ the worker prunes older records when a deployment reaches a terminal state.
 3. ~~`dotnet` buildpack (no Dockerfile needed)~~ Done (v0.2); ~~health-gated traffic switch~~ Done (v0.4: TCP readiness + inspect gate, bad images fail instead of routing).
 4. ~~CI (build + test + architecture tests + image builds) and compose.~~ Done (v0.3).
 5. ~~API-key auth~~ Done (v0.5); ~~log streaming~~ Done (v0.5: cursor tail + SSE stream). OIDC is future.
-6. Multi-worker leases/heartbeats, blue/green, custom domains.
+6. ~~Multi-worker leases/heartbeats~~ Done (v0.6: optimistic lease claims + heartbeat + lapsed-lease recovery). Remaining: blue/green, custom domains.
 
 ## Repo layout
 
 ```text
 src/Octopus.Api        HTTP + YARP + EF Sqlite wiring
-src/Octopus.Worker     DeploymentWorker (claim -> clone -> build-plan -> build -> start w/ env-file)
+src/Octopus.Worker     DeploymentWorker (lease claim -> clone -> build-plan -> build -> start w/ env-file, heartbeat, prune)
 src/Modules/...        Apps (+EnvVars), Deployments (+Webhooks, EnvVar storage), GitHub, Runtime (+Buildpack, env-file), Routing
 src/BuildingBlocks     Result, Slug, ProcessRunner
-tests/Octopus.Tests    validators, webhooks, buildpack, env vars, health probes, sqlite ordering, architecture (82 tests)
+tests/Octopus.Tests    validators, webhooks, buildpack, env vars, quotas, auth, leases, health probes, sqlite ordering, architecture (157 tests)
 ```

@@ -8,8 +8,9 @@ namespace Octopus.Worker;
 
 /// <summary>
 /// Claims Queued deployments (oldest first) and runs Clone -> Build -> Start.
-/// Single-worker claim is sufficient for v0.1; document the limit and add leases for multi-worker.
-/// Stale Running recovery: on startup, requeue Cloning/Building/Starting as Queued (crash recovery).
+/// Claims carry a 2-minute lease renewed by heartbeat; a restarting worker only
+/// requeues deployments whose lease already lapsed, so live work is not stolen.
+/// Stale-lease recovery still cannot interrupt an already-claimed attempt.
 /// Build: repo Dockerfile wins, else the dotnet buildpack generates one (see Runtime).
 /// </summary>
 public sealed class DeploymentWorker(
@@ -19,6 +20,9 @@ public sealed class DeploymentWorker(
 {
     /// <summary>How long a claim lasts without a heartbeat (see heartbeat loop in RunDeploymentAsync).</summary>
     internal static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
+
+    /// <summary>Renewal cadence, well within <see cref="LeaseDuration"/>.</summary>
+    internal static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
 
     internal static string WorkerId { get; } =
         ResolveWorkerId();
@@ -63,13 +67,16 @@ public sealed class DeploymentWorker(
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<OctopusDbContext>();
-        var stale = await db.Deployments.Where(d =>
-            d.Status == DeploymentStatus.Cloning || d.Status == DeploymentStatus.Building || d.Status == DeploymentStatus.Starting).ToListAsync(ct);
+        // Only lapsed leases are recoverable: a live lease means another worker
+        // is actively working the deployment, so it must not be stolen.
+        var stale = await DeploymentLeases.ListRecoverableAsync(db, DateTimeOffset.UtcNow, ct);
         foreach (var d in stale)
         {
             d.Status = DeploymentStatus.Queued;
-            d.Error = "Requeued after worker restart.";
-            db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = d.Id, Line = "Worker restarted: requeued stale deployment." });
+            d.LeaseOwner = null;
+            d.LeaseExpiresAt = null;
+            d.Error = "Requeued: lease lapsed without heartbeat.";
+            db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = d.Id, Line = "Lease lapsed: requeued stale deployment." });
         }
         if (stale.Count > 0)
         {
@@ -128,6 +135,31 @@ public sealed class DeploymentWorker(
             ?? Path.Combine(Environment.CurrentDirectory, "workspace");
         var workDir = Path.Combine(workspace, app.Slug, deployment.Id.ToString("N"));
 
+        // The heartbeat renews the lease on a separate context while the run
+        // below holds this one. Both sides serialize through leaseLock, and
+        // every save refreshes the concurrency-token original — otherwise the
+        // heartbeat's renewals would trip optimistic-concurrency failures on
+        // the run's own saves.
+        using var leaseLock = new SemaphoreSlim(1, 1);
+        async Task SaveAsync()
+        {
+            await leaseLock.WaitAsync(ct);
+            try
+            {
+                var current = await db.Deployments.Where(x => x.Id == deployment.Id)
+                    .Select(x => x.LeaseExpiresAt).FirstOrDefaultAsync(ct);
+                db.Entry(deployment).Property(d => d.LeaseExpiresAt).OriginalValue = current;
+                await SaveAsync();
+            }
+            finally
+            {
+                leaseLock.Release();
+            }
+        }
+
+        using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var heartbeat = RenewLeaseLoopAsync(deployment.Id, leaseLock, heartbeatCts.Token);
+
         try
         {
             void Log(string line)
@@ -141,24 +173,24 @@ public sealed class DeploymentWorker(
             Directory.CreateDirectory(workspace);
 
             deployment.Status = DeploymentStatus.Cloning;
-            await db.SaveChangesAsync(ct);
+            await SaveAsync();
 
             var urlCheck = GitHubUrl.Validate(app.RepoUrl);
             if (!urlCheck.IsSuccess) throw new InvalidOperationException(urlCheck.Error);
             var repo = urlCheck.Value!;
 
             var clone = await GitCloner.CloneAsync(repo.CanonicalUrl, repo.Owner, repo.Repo, app.Branch, workDir, ct);
-            await db.SaveChangesAsync(ct); // flush clone log lines saved via Log? (clone logs go to result)
+            await SaveAsync(); // flush clone log lines saved via Log? (clone logs go to result)
             if (!clone.IsSuccess) throw new InvalidOperationException(clone.Error);
             deployment.CommitSha = clone.Value;
             Log($"Cloned {repo.RedactedRef}@{deployment.CommitSha}.");
 
             deployment.Status = DeploymentStatus.Building;
-            await db.SaveChangesAsync(ct);
+            await SaveAsync();
 
             var image = DockerRunner.ImageName(app.Slug, deployment.Id);
             // Persist partial state so polling sees progress.
-            await db.SaveChangesAsync(ct);
+            await SaveAsync();
             var planCheck = BuildPlanDetector.Detect(workDir, deployment.ProjectPath);
             if (!planCheck.IsSuccess || planCheck.Value is null)
                 throw new InvalidOperationException($"Buildpack: {planCheck.Error}");
@@ -167,11 +199,11 @@ public sealed class DeploymentWorker(
                 ? $"Build plan: dotnet buildpack ({dotnet.ProjectRelativePath})."
                 : "Build plan: repo Dockerfile.");
             var build = await docker.BuildWithPlanAsync(workDir, image, plan, Log, ct);
-            await db.SaveChangesAsync(ct);
+            await SaveAsync();
             if (!build.IsSuccess) throw new InvalidOperationException(build.Error);
 
             deployment.Status = DeploymentStatus.Starting;
-            await db.SaveChangesAsync(ct);
+            await SaveAsync();
 
             var taken = await db.Apps.Where(a => a.Status == AppStatus.Running && a.Id != app.Id)
                 .Select(a => a.TargetPort).ToListAsync(ct);
@@ -185,7 +217,7 @@ public sealed class DeploymentWorker(
                 await LoadEnvAsync(db, app.Id, ct),
                 DockerRunner.FormatMemory(app.MaxMemoryMb), DockerRunner.FormatCpus(app.CpuMillicores),
                 Log, ct);
-            await db.SaveChangesAsync(ct);
+            await SaveAsync();
             if (!start.IsSuccess) throw new InvalidOperationException(start.Error);
 
             // Health gate: the container must accept TCP on its host port and (when
@@ -215,7 +247,7 @@ public sealed class DeploymentWorker(
             app.ContainerName = DockerRunner.ContainerName(app.Slug);
             app.UpdatedAt = DateTimeOffset.UtcNow;
             Log($"Running at /apps/{app.Slug}/ -> 127.0.0.1:{port} (container:{deployment.ContainerPort}).");
-            await db.SaveChangesAsync(ct);
+            await SaveAsync();
             await DeploymentQueries.PruneAsync(db, app.Id, ct: ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -226,15 +258,55 @@ public sealed class DeploymentWorker(
             app.Status = AppStatus.Failed;
             app.UpdatedAt = DateTimeOffset.UtcNow;
             db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Line = $"FAILED: {deployment.Error}" });
-            await db.SaveChangesAsync(ct);
+            await SaveAsync();
             await DeploymentQueries.PruneAsync(db, app.Id, ct: ct);
             log.LogWarning(ex, "Deployment {Id} failed.", deployment.Id);
         }
         finally
         {
+            heartbeatCts.Cancel();
+            try { await heartbeat.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None); }
+            catch { /* heartbeat teardown is best effort */ }
             try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
             catch (Exception ex) { log.LogDebug(ex, "Workspace cleanup failed."); }
         }
+    }
+
+    /// <summary>
+    /// Renews this worker's lease until the run ends or the lease is lost.
+    /// Renewal is a guarded UPDATE (owner must still match), serialized with
+    /// the run's saves through <paramref name="leaseLock"/>.
+    /// </summary>
+    private async Task RenewLeaseLoopAsync(Guid deploymentId, SemaphoreSlim leaseLock, CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(HeartbeatInterval);
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var held = false;
+                try
+                {
+                    await leaseLock.WaitAsync(ct);
+                    held = true;
+                    using var scope = services.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<OctopusDbContext>();
+                    var renewed = await db.Deployments
+                        .Where(d => d.Id == deploymentId && d.LeaseOwner == WorkerId)
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(d => d.LeaseExpiresAt, DateTimeOffset.UtcNow.Add(LeaseDuration)), ct);
+                    if (renewed == 0)
+                    {
+                        log.LogWarning("Lease for deployment {Id} lost; stopping heartbeat.", deploymentId);
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) { return; }
+                catch (Exception ex) { log.LogDebug(ex, "Lease renewal failed."); }
+                finally { if (held) leaseLock.Release(); }
+            }
+        }
+        catch (OperationCanceledException) { /* run ended */ }
     }
 
     private static async Task<Dictionary<string, string>> LoadEnvAsync(OctopusDbContext db, Guid appId, CancellationToken ct)
