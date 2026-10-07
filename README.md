@@ -166,6 +166,7 @@ SSRF surface.
 |---|---|---|
 | GET | `/health` | liveness |
 | POST | `/api/apps` | `{name, repoUrl, branch?, containerPort?, memoryMb?, cpuMillicores?}` |
+| PATCH | `/api/apps/{id}` | `{branch}` — retarget branch (name/slug immutable) |
 | PUT | `/api/apps/{id}/quota` | `{memoryMb?, cpuMillicores?}` — allowlisted caps |
 | GET | `/api/apps` | list |
 | GET | `/api/apps/{id}` | one |

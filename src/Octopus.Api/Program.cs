@@ -93,6 +93,17 @@ app.MapGet("/api/apps/{id:guid}", async (Guid id, OctopusDbContext db, Cancellat
     return entity is null ? Results.NotFound() : Results.Ok(ToDto(entity));
 });
 
+app.MapPatch("/api/apps/{id:guid}", async (Guid id, UpdateAppRequest? req, OctopusDbContext db, CancellationToken ct) =>
+{
+    var entity = await db.Apps.FindAsync([id], ct);
+    if (entity is null) return Results.NotFound(new { error = "App not found." });
+    if (req?.Branch is null) return Results.BadRequest(new { error = "Nothing to update (branch)." });
+    var check = AppValidator.ChangeBranch(entity, req.Branch);
+    if (!check.IsSuccess) return Results.BadRequest(new { error = check.Error });
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(ToDto(entity));
+});
+
 app.MapDelete("/api/apps/{id:guid}", async (Guid id, OctopusDbContext db, ILogger<Program> log, CancellationToken ct) =>
 {
     var entity = await db.Apps.FindAsync([id], ct);
@@ -632,6 +643,7 @@ public sealed class RouteRefresher(IServiceProvider services, ILogger<RouteRefre
 public partial class Program;
 
 public sealed record CreateAppRequest(string? Name, string? RepoUrl, string? Branch, int? ContainerPort, int? MemoryMb, int? CpuMillicores);
+public sealed record UpdateAppRequest(string? Branch);
 public sealed record CreateDeploymentRequest(int? ContainerPort, string? ProjectPath);
 public sealed record SetQuotaRequest(int? MemoryMb, int? CpuMillicores);
 public sealed record CreateKeyRequest(string? Name);

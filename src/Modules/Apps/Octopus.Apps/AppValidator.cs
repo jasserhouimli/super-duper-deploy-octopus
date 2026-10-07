@@ -34,4 +34,18 @@ public static class AppValidator
         };
         return Result<App>.Ok(app);
     }
+
+    /// <summary>
+    /// Retargets an app at a new branch. Name/slug are immutable (URLs and
+    /// container names derive from them). Future pushes and deployments use
+    /// the new branch; already-queued work keeps its snapshot semantics.
+    /// </summary>
+    public static Result<App> ChangeBranch(App app, string branch)
+    {
+        if (string.IsNullOrWhiteSpace(branch) || branch.Length > 100 || branch.Contains(' ') || branch.Contains(".."))
+            return Result<App>.Fail("Branch is invalid.");
+        app.Branch = branch.Trim();
+        app.UpdatedAt = DateTimeOffset.UtcNow;
+        return Result<App>.Ok(app);
+    }
 }

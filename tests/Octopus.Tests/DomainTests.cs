@@ -61,4 +61,28 @@ public sealed class AppValidatorTests
     [Fact]
     public void Rejects_path_traversal_branch() =>
         Assert.False(AppValidator.Create("x", "https://github.com/o/r", "../evil").IsSuccess);
+
+    [Fact]
+    public void ChangeBranch_updates_and_timestamps()
+    {
+        var app = AppValidator.Create("Demo", "https://github.com/owner/repo", "main").Value!;
+        var before = app.UpdatedAt;
+        var r = AppValidator.ChangeBranch(app, "release");
+        Assert.True(r.IsSuccess);
+        Assert.Equal("release", app.Branch);
+        Assert.True(app.UpdatedAt >= before);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    [InlineData("../evil")]
+    [InlineData("has space")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void ChangeBranch_rejects_bad_branches(string branch)
+    {
+        var app = AppValidator.Create("Demo", "https://github.com/owner/repo", "main").Value!;
+        Assert.False(AppValidator.ChangeBranch(app, branch).IsSuccess);
+        Assert.Equal("main", app.Branch);
+    }
 }
