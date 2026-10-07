@@ -49,6 +49,15 @@ public sealed class SqliteOrderingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Deployments_filter_by_status()
+    {
+        var failed = await DeploymentQueries.ListByAppAsync(_db, _appId, status: DeploymentStatus.Failed);
+        Assert.Empty(failed);
+        var queued = await DeploymentQueries.ListByAppAsync(_db, _appId, status: DeploymentStatus.Queued);
+        Assert.Equal(3, queued.Count);
+    }
+
+    [Fact]
     public async Task Webhook_events_list_newest_first()
     {
         var list = await DeploymentQueries.ListWebhookEventsAsync(_db, _appId);

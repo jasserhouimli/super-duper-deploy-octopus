@@ -12,10 +12,13 @@ namespace Octopus.Deployments;
 public static class DeploymentQueries
 {
     public static async Task<List<Deployment>> ListByAppAsync(
-        OctopusDbContext db, Guid appId, int max = 50, CancellationToken ct = default)
+        OctopusDbContext db, Guid appId, int max = 50, DeploymentStatus? status = null, CancellationToken ct = default)
     {
         var rows = await db.Deployments.Where(d => d.AppId == appId).Take(1000).ToListAsync(ct);
-        return rows.OrderByDescending(d => d.CreatedAt).Take(Math.Clamp(max, 1, 100)).ToList();
+        var query = rows.AsEnumerable();
+        if (status.HasValue)
+            query = query.Where(d => d.Status == status.Value);
+        return query.OrderByDescending(d => d.CreatedAt).Take(Math.Clamp(max, 1, 100)).ToList();
     }
 
     public static async Task<List<WebhookEvent>> ListWebhookEventsAsync(

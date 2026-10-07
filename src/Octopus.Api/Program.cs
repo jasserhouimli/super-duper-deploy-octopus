@@ -135,10 +135,17 @@ app.MapPost("/api/apps/{id:guid}/deployments", async (Guid id, CreateDeploymentR
     return Results.Accepted($"/api/deployments/{deployment.Id}", new { deployment.Id, status = deployment.Status.ToString() });
 });
 
-app.MapGet("/api/apps/{id:guid}/deployments", async (Guid id, OctopusDbContext db, CancellationToken ct) =>
+app.MapGet("/api/apps/{id:guid}/deployments", async (Guid id, string? status, OctopusDbContext db, CancellationToken ct) =>
 {
     if (!await db.Apps.AnyAsync(a => a.Id == id, ct)) return Results.NotFound();
-    var list = await DeploymentQueries.ListByAppAsync(db, id, 50, ct);
+    DeploymentStatus? filter = null;
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+        if (!Enum.TryParse<DeploymentStatus>(status, ignoreCase: true, out var parsed))
+            return Results.BadRequest(new { error = $"Unknown status '{status}'." });
+        filter = parsed;
+    }
+    var list = await DeploymentQueries.ListByAppAsync(db, id, 50, filter, ct);
     return Results.Ok(list.Select(d => new
     {
         d.Id,

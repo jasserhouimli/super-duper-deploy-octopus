@@ -171,7 +171,7 @@ SSRF surface.
 | GET | `/api/apps/{id}` | one |
 | DELETE | `/api/apps/{id}` | stops container, deletes history + webhooks |
 | POST | `/api/apps/{id}/deployments` | `{containerPort?, projectPath?}`; `202`, `409` if one in progress |
-| GET | `/api/apps/{id}/deployments` | last 50 |
+| GET | `/api/apps/{id}/deployments` | last 50 (`?status=Failed` filters, case-insensitive) |
 | GET | `/api/deployments/{id}` | one |
 | POST | `/api/deployments/{id}/cancel` | cancel a queued deployment (`409` once claimed) |
 | POST | `/api/deployments/{id}/retry` | requeue a failed/cancelled deployment (`202`, `409` if one in progress) |
