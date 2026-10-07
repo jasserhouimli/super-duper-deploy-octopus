@@ -29,6 +29,26 @@ public static class DeploymentQueries
     }
 
     /// <summary>
+    /// Retention: keeps the newest <paramref name="keepLast"/> deployments per
+    /// app (matching the list window) and deletes older ones with their logs.
+    /// Returns the number of pruned deployments.
+    /// </summary>
+    public static async Task<int> PruneAsync(
+        OctopusDbContext db, Guid appId, int keepLast = 50, CancellationToken ct = default)
+    {
+        var keep = Math.Clamp(keepLast, 1, 1000);
+        var rows = await db.Deployments.Where(d => d.AppId == appId).Take(5000).ToListAsync(ct);
+        var stale = rows.OrderByDescending(d => d.CreatedAt).Skip(keep).ToList();
+        if (stale.Count == 0) return 0;
+        var ids = stale.Select(d => d.Id).ToHashSet();
+        var logs = await db.DeploymentLogs.Where(l => ids.Contains(l.DeploymentId)).Take(100_000).ToListAsync(ct);
+        db.DeploymentLogs.RemoveRange(logs);
+        db.Deployments.RemoveRange(stale);
+        await db.SaveChangesAsync(ct);
+        return stale.Count;
+    }
+
+    /// <summary>
     /// Ascending log tail for polling/streaming. `afterId` is an exclusive
     /// cursor (0 = from the start); `take` is clamped to keep queries bounded.
     /// Ordering by the integer PK is server-side and SQLite-safe.

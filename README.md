@@ -190,6 +190,9 @@ SSRF surface.
 
 Deployed apps: `GET /apps/{slug}/{path...}` (YARP, prefix stripped).
 
+Deployment history is capped at the newest 50 per app (with their logs) —
+the worker prunes older records when a deployment reaches a terminal state.
+
 ## Security (enforced)
 
 - Control API auth: `Authorization: Bearer oct_...` on all `/api` routes except

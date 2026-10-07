@@ -190,6 +190,7 @@ public sealed class DeploymentWorker(
             app.UpdatedAt = DateTimeOffset.UtcNow;
             Log($"Running at /apps/{app.Slug}/ -> 127.0.0.1:{port} (container:{deployment.ContainerPort}).");
             await db.SaveChangesAsync(ct);
+            await DeploymentQueries.PruneAsync(db, app.Id, ct: ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -200,6 +201,7 @@ public sealed class DeploymentWorker(
             app.UpdatedAt = DateTimeOffset.UtcNow;
             db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Line = $"FAILED: {deployment.Error}" });
             await db.SaveChangesAsync(ct);
+            await DeploymentQueries.PruneAsync(db, app.Id, ct: ct);
             log.LogWarning(ex, "Deployment {Id} failed.", deployment.Id);
         }
         finally
