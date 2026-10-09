@@ -152,6 +152,29 @@ public sealed class DockerRunner
 
     internal static string RedactForLog(string args) => args; // args never contain values (env-file path only)
 
+    /// <summary>Bounds the captured tail (1..200 lines).</summary>
+    public static int NormalizeTail(int tail) => Math.Clamp(tail, 1, 200);
+
+    /// <summary>Builds `docker logs` args for a bounded tail.</summary>
+    public static string BuildLogsArgs(string containerName, int tail) =>
+        $"logs --tail {NormalizeTail(tail)} \"{containerName}\"";
+
+    /// <summary>
+    /// Captures the container's log tail into the deployment log (via <paramref name="log"/>).
+    /// Best effort: missing containers report failure without lines.
+    /// </summary>
+    public async Task<Result<string>> LogsAsync(string containerName, int tail, Action<string> log, CancellationToken ct)
+    {
+        var args = BuildLogsArgs(containerName, tail);
+        var run = await ProcessRunner.RunAsync("docker", args, Environment.CurrentDirectory, TimeSpan.FromSeconds(30), ct);
+        if (run.TimedOut) return Result<string>.Fail("Docker logs timed out.");
+        if (run.ExitCode != 0) return Result<string>.Fail($"No container logs (exit {run.ExitCode}).");
+        var output = string.IsNullOrWhiteSpace(run.StdOut) ? run.StdErr : run.StdOut;
+        if (string.IsNullOrWhiteSpace(output)) return Result<string>.Fail("Container produced no log output.");
+        AppendLog(log, output);
+        return Result<string>.Ok("captured");
+    }
+
     public async Task StopAndRemoveAsync(string containerName, Action<string> log, CancellationToken ct)
     {
         var stop = await ProcessRunner.RunAsync("docker", $"stop \"{containerName}\"", Environment.CurrentDirectory, TimeSpan.FromSeconds(30), ct);

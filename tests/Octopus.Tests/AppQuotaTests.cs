@@ -105,4 +105,18 @@ public sealed class DockerQuotaArgsTests
         Assert.Contains("--memory 256m", args);
         Assert.Contains("--cpus 0.5", args);
     }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(50, 50)]
+    [InlineData(500, 200)]
+    public void Log_tail_is_bounded(int tail, int expected) =>
+        Assert.Equal(expected, DockerRunner.NormalizeTail(tail));
+
+    [Fact]
+    public void Logs_args_quote_container_and_bound_tail()
+    {
+        Assert.Equal("logs --tail 50 \"octopus-demo\"", DockerRunner.BuildLogsArgs("octopus-demo", 50));
+        Assert.Equal("logs --tail 200 \"c\"", DockerRunner.BuildLogsArgs("c", 9999));
+    }
 }

@@ -252,6 +252,8 @@ public sealed class DeploymentWorker(
                 Log(ready
                     ? "Readiness failed: container state is not healthy; stopping."
                     : "Readiness failed: port did not accept connections within 30s; stopping.");
+                Log("--- container log tail (last 50 lines) ---");
+                await docker.LogsAsync(DockerRunner.ContainerName(app.Slug), 50, Log, ct);
                 await docker.StopAndRemoveAsync(DockerRunner.ContainerName(app.Slug), _ => { }, ct);
                 throw new InvalidOperationException("Container did not become ready within 30s.");
             }
