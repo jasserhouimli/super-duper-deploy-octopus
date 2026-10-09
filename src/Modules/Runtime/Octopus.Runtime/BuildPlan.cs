@@ -3,8 +3,8 @@ namespace Octopus.Runtime;
 /// <summary>How a cloned repo becomes a container image.</summary>
 public abstract record BuildPlan;
 
-/// <summary>Repo provides its own Dockerfile at the root (authoritative).</summary>
-public sealed record DockerfilePlan : BuildPlan;
+/// <summary>Repo provides its own Dockerfile (root by default, or an explicit relative path for monorepos).</summary>
+public sealed record DockerfilePlan(string? DockerfileRelativePath) : BuildPlan;
 
 /// <summary>
 /// No Dockerfile: Octopus generates one for a .NET web project.

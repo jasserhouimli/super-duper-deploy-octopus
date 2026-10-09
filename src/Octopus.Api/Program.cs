@@ -149,6 +149,16 @@ app.MapPost("/api/apps/{id:guid}/deployments", async (Guid id, CreateDeploymentR
         projectPath = norm.Value;
     }
 
+    string? dockerfilePath = null;
+    if (!string.IsNullOrWhiteSpace(req?.DockerfilePath))
+    {
+        if (projectPath is not null)
+            return Results.BadRequest(new { error = "Choose either projectPath (buildpack) or dockerfilePath, not both." });
+        var norm = Octopus.Runtime.BuildPlanDetector.NormalizeDockerfilePath(req.DockerfilePath);
+        if (!norm.IsSuccess) return Results.BadRequest(new { error = norm.Error });
+        dockerfilePath = norm.Value;
+    }
+
     var deployment = new Deployment
     {
         Id = Guid.NewGuid(),
@@ -156,6 +166,7 @@ app.MapPost("/api/apps/{id:guid}/deployments", async (Guid id, CreateDeploymentR
         Status = DeploymentStatus.Queued,
         ContainerPort = req?.ContainerPort is > 0 and < 65536 ? req.ContainerPort.Value : 8080,
         ProjectPath = projectPath,
+        DockerfilePath = dockerfilePath,
         CreatedAt = DateTimeOffset.UtcNow,
     };
     entity.Status = AppStatus.Deploying;
@@ -187,6 +198,7 @@ app.MapGet("/api/apps/{id:guid}/deployments", async (Guid id, string? status, Oc
         d.Error,
         d.ContainerPort,
         d.ProjectPath,
+        d.DockerfilePath,
         d.CreatedAt,
         d.StartedAt,
         d.FinishedAt,
@@ -205,6 +217,7 @@ app.MapGet("/api/deployments/{id:guid}", async (Guid id, OctopusDbContext db, Ca
         d.Error,
         d.ContainerPort,
         d.ProjectPath,
+        d.DockerfilePath,
         d.CreatedAt,
         d.StartedAt,
         d.FinishedAt,
@@ -643,7 +656,7 @@ public partial class Program;
 
 public sealed record CreateAppRequest(string? Name, string? RepoUrl, string? Branch, int? ContainerPort, int? MemoryMb, int? CpuMillicores);
 public sealed record UpdateAppRequest(string? Branch);
-public sealed record CreateDeploymentRequest(int? ContainerPort, string? ProjectPath);
+public sealed record CreateDeploymentRequest(int? ContainerPort, string? ProjectPath, string? DockerfilePath);
 public sealed record SetQuotaRequest(int? MemoryMb, int? CpuMillicores);
 public sealed record CreateKeyRequest(string? Name);
 public sealed record SetEnvRequest(Dictionary<string, string>? Vars);

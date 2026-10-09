@@ -62,6 +62,8 @@ public static class DbBootstrap
 
         if (!ColumnExists(db, "Deployments", "ProjectPath"))
             db.Database.ExecuteSqlRaw("""ALTER TABLE "Deployments" ADD COLUMN "ProjectPath" TEXT NULL;""");
+        if (!ColumnExists(db, "Deployments", "DockerfilePath"))
+            db.Database.ExecuteSqlRaw("""ALTER TABLE "Deployments" ADD COLUMN "DockerfilePath" TEXT NULL;""");
         if (!ColumnExists(db, "Deployments", "LeaseOwner"))
             db.Database.ExecuteSqlRaw("""ALTER TABLE "Deployments" ADD COLUMN "LeaseOwner" TEXT NULL;""");
         if (!ColumnExists(db, "Deployments", "LeaseExpiresAt"))

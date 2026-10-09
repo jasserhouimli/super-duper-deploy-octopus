@@ -14,14 +14,24 @@ public static class BuildPlanDetector
         "bin", "obj", ".git", ".vs", "node_modules", "artifacts", "TestResults",
     };
 
-    public static Result<BuildPlan> Detect(string contextDir, string? projectOverride = null)
+    public static Result<BuildPlan> Detect(string contextDir, string? projectOverride = null, string? dockerfileOverride = null)
     {
         if (string.IsNullOrWhiteSpace(contextDir) || !Directory.Exists(contextDir))
             return Result<BuildPlan>.Fail("Workspace directory is missing.");
 
+        // Explicit Dockerfile (monorepo layouts) wins over everything.
+        if (!string.IsNullOrWhiteSpace(dockerfileOverride))
+        {
+            var norm = NormalizeDockerfilePath(dockerfileOverride);
+            if (!norm.IsSuccess) return Result<BuildPlan>.Fail(norm.Error);
+            if (!File.Exists(Path.Combine(contextDir, norm.Value!)))
+                return Result<BuildPlan>.Fail($"Dockerfile '{norm.Value}' not found in repo.");
+            return Result<BuildPlan>.Ok(new DockerfilePlan(norm.Value));
+        }
+
         if (File.Exists(Path.Combine(contextDir, "Dockerfile"))
             || File.Exists(Path.Combine(contextDir, "dockerfile")))
-            return Result<BuildPlan>.Ok(new DockerfilePlan());
+            return Result<BuildPlan>.Ok(new DockerfilePlan(null));
 
         string relative;
         if (!string.IsNullOrWhiteSpace(projectOverride))
@@ -51,6 +61,19 @@ public static class BuildPlanDetector
             return Result<string>.Fail("ProjectPath must be a relative path without '..'.");
         if (!rel.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
             return Result<string>.Fail("ProjectPath must point at a .csproj file.");
+        return Result<string>.Ok(rel);
+    }
+
+    /// <summary>Validates an explicit Dockerfile location (monorepo layouts). Existence is checked by Detect.</summary>
+    public static Result<string> NormalizeDockerfilePath(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input) || input.Length > 300)
+            return Result<string>.Fail("DockerfilePath must be a relative path (max 300 chars).");
+        var rel = input.Trim().Replace('\\', '/');
+        if (Path.IsPathRooted(rel) || rel.StartsWith('/') || rel.Contains("../", StringComparison.Ordinal) || rel == ".." || rel.EndsWith("/..", StringComparison.Ordinal))
+            return Result<string>.Fail("DockerfilePath must be a relative path without '..'.");
+        if (rel.EndsWith('/') || rel.Length == 0)
+            return Result<string>.Fail("DockerfilePath must point at a file.");
         return Result<string>.Ok(rel);
     }
 

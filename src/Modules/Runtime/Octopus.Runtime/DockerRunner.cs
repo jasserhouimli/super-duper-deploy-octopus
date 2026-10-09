@@ -18,16 +18,21 @@ public sealed class DockerRunner
         if (!File.Exists(Path.Combine(contextDir, "Dockerfile")))
             return Result<string>.Fail("v0.1 requires a Dockerfile at the repo root (dotnet buildpack is on the roadmap).");
 
-        return await BuildImageAsync(contextDir, imageName, log, ct);
+        return await BuildImageAsync(contextDir, imageName, null, log, ct);
     }
 
     /// <summary>
-    /// v0.2: builds from the repo Dockerfile or a buildpack-generated one.
-    /// Generated Dockerfiles are written into the throwaway workspace only.
+    /// Builds from the repo Dockerfile (root or explicit relative path) or a
+    /// buildpack-generated one. Generated Dockerfiles are written into the
+    /// throwaway workspace only.
     /// </summary>
     public async Task<Result<string>> BuildWithPlanAsync(
         string contextDir, string imageName, BuildPlan plan, Action<string> log, CancellationToken ct)
     {
+        string? dockerfile = null;
+        if (plan is DockerfilePlan { DockerfileRelativePath: not null } explicit_)
+            dockerfile = explicit_.DockerfileRelativePath;
+
         if (plan is DotnetPlan dotnet)
         {
             log($"Buildpack: no Dockerfile — generating one for {dotnet.ProjectRelativePath} ({DockerfileGenerator.SdkImage}).");
@@ -43,18 +48,25 @@ public sealed class DockerRunner
             }
         }
 
-        return await BuildImageAsync(contextDir, imageName, log, ct);
+        return await BuildImageAsync(contextDir, imageName, dockerfile, log, ct);
     }
 
-    private async Task<Result<string>> BuildImageAsync(string contextDir, string imageName, Action<string> log, CancellationToken ct)
+    private async Task<Result<string>> BuildImageAsync(string contextDir, string imageName, string? dockerfile, Action<string> log, CancellationToken ct)
     {
-        log($"$ docker build -t {imageName} .");
-        var run = await ProcessRunner.RunAsync("docker", $"build -t \"{imageName}\" .", contextDir, TimeSpan.FromMinutes(10), ct);
+        var args = BuildBuildArgs(imageName, dockerfile);
+        log("$ docker " + args);
+        var run = await ProcessRunner.RunAsync("docker", args, contextDir, TimeSpan.FromMinutes(10), ct);
         AppendLog(log, run.StdOut);
         AppendLog(log, run.StdErr);
         if (run.TimedOut) return Result<string>.Fail("Docker build timed out.");
         return run.ExitCode == 0 ? Result<string>.Ok(imageName) : Result<string>.Fail($"Docker build failed (exit {run.ExitCode}).");
     }
+
+    /// <summary>Builds `docker build` args (`-f` only for non-root Dockerfiles; values are repo-relative paths).</summary>
+    public static string BuildBuildArgs(string imageName, string? dockerfileRelativePath) =>
+        dockerfileRelativePath is null
+            ? $"build -t \"{imageName}\" ."
+            : $"build -f \"{dockerfileRelativePath}\" -t \"{imageName}\" .";
 
     public async Task<Result<int>> StartAsync(string containerName, string imageName, int hostPort, int containerPort, Action<string> log, CancellationToken ct)
         => await StartWithEnvAsync(containerName, imageName, hostPort, containerPort, null, log, ct);

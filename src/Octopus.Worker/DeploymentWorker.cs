@@ -208,13 +208,16 @@ public sealed class DeploymentWorker(
             var image = DockerRunner.ImageName(app.Slug, deployment.Id);
             // Persist partial state so polling sees progress.
             await SaveAsync();
-            var planCheck = BuildPlanDetector.Detect(workDir, deployment.ProjectPath);
+            var planCheck = BuildPlanDetector.Detect(workDir, deployment.ProjectPath, deployment.DockerfilePath);
             if (!planCheck.IsSuccess || planCheck.Value is null)
                 throw new InvalidOperationException($"Buildpack: {planCheck.Error}");
             var plan = planCheck.Value;
-            Log(plan is DotnetPlan dotnet
-                ? $"Build plan: dotnet buildpack ({dotnet.ProjectRelativePath})."
-                : "Build plan: repo Dockerfile.");
+            Log(plan switch
+            {
+                DotnetPlan dotnet => $"Build plan: dotnet buildpack ({dotnet.ProjectRelativePath}).",
+                DockerfilePlan { DockerfileRelativePath: not null } explicit_ => $"Build plan: repo Dockerfile ({explicit_.DockerfileRelativePath}).",
+                _ => "Build plan: repo Dockerfile.",
+            });
             var build = await docker.BuildWithPlanAsync(workDir, image, plan, Log, ct);
             await SaveAsync();
             if (!build.IsSuccess) throw new InvalidOperationException(build.Error);

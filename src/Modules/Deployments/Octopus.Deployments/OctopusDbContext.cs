@@ -37,6 +37,7 @@ public sealed class OctopusDbContext(DbContextOptions<OctopusDbContext> options)
             e.Property(x => x.CommitSha).HasMaxLength(64);
             e.Property(x => x.Error).HasMaxLength(2000);
             e.Property(x => x.ProjectPath).HasMaxLength(300);
+            e.Property(x => x.DockerfilePath).HasMaxLength(300);
             e.Property(x => x.LeaseOwner).HasMaxLength(100);
             e.Property(x => x.LeaseExpiresAt).IsConcurrencyToken();
         });

@@ -97,4 +97,47 @@ public sealed class BuildpackTests : IDisposable
         Assert.Contains("\"Web.dll\"", df);
         Assert.Contains("8080", df);
     }
+
+    [Fact]
+    public void Nested_dockerfile_override_is_detected()
+    {
+        var dir = NewDir();
+        var sub = Path.Combine(dir, "deploy", "prod");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "Dockerfile"), "FROM scratch\n");
+        var r = BuildPlanDetector.Detect(dir, dockerfileOverride: "deploy/prod/Dockerfile");
+        Assert.True(r.IsSuccess);
+        var plan = Assert.IsType<DockerfilePlan>(r.Value);
+        Assert.Equal("deploy/prod/Dockerfile", plan.DockerfileRelativePath);
+    }
+
+    [Fact]
+    public void Dockerfile_override_beats_root_dockerfile()
+    {
+        var dir = NewDir();
+        File.WriteAllText(Path.Combine(dir, "Dockerfile"), "FROM scratch\n");
+        var sub = Path.Combine(dir, "alt");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "Dockerfile"), "FROM scratch\n");
+        var r = BuildPlanDetector.Detect(dir, dockerfileOverride: "alt/Dockerfile");
+        Assert.True(r.IsSuccess);
+        Assert.Equal("alt/Dockerfile", Assert.IsType<DockerfilePlan>(r.Value).DockerfileRelativePath);
+    }
+
+    [Theory]
+    [InlineData("../evil/Dockerfile")]
+    [InlineData("/abs/Dockerfile")]
+    [InlineData("missing/Dockerfile")]
+    public void Bad_dockerfile_overrides_fail(string input)
+    {
+        Assert.False(BuildPlanDetector.Detect(NewDir(), dockerfileOverride: input).IsSuccess);
+    }
+
+    [Fact]
+    public void Build_args_use_dash_f_only_for_explicit_path()
+    {
+        Assert.Equal("build -t \"img\" .", DockerRunner.BuildBuildArgs("img", null));
+        Assert.Equal("build -f \"deploy/prod/Dockerfile\" -t \"img\" .",
+            DockerRunner.BuildBuildArgs("img", "deploy/prod/Dockerfile"));
+    }
 }

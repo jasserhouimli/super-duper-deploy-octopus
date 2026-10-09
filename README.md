@@ -114,6 +114,8 @@ Invoke-RestMethod "http://localhost:5000/api/apps/$($app.id)/env"  # -> keys onl
 # Dockerfile repo, or dotnet web project (buildpack), optionally pinned:
 Invoke-RestMethod -Method Post -Uri "http://localhost:5000/api/apps/$($app.id)/deployments" `
   -ContentType application/json -Body '{"projectPath":"src/Web/Web.csproj"}'
+# ...or a nested Dockerfile for monorepos (not both):
+# -Body '{"dockerfilePath":"deploy/prod/Dockerfile"}'
 
 Invoke-RestMethod http://localhost:5000/api/apps
 # open: http://localhost:5000/apps/demo/
@@ -166,7 +168,8 @@ No `Dockerfile`? The worker detects the shallowest `Microsoft.NET.Sdk.Web` proje
 (`bin`/`obj`/`.git`/`node_modules` excluded, depth ≤ 4) and generates a multi-stage
 `.NET 10` Dockerfile into its throwaway workspace copy (never committed to your repo).
 A repo `Dockerfile` always wins. Override per deployment via `projectPath`
-(relative `.csproj`, no `..`).
+(relative `.csproj`, no `..`). Monorepos can point at a nested Dockerfile via
+`dockerfilePath` (relative, no `..`, must exist — built with `docker build -f`):
 
 ## Health-gated deploys
 
@@ -188,7 +191,7 @@ SSRF surface.
 | GET | `/api/apps` | list |
 | GET | `/api/apps/{id}` | one |
 | DELETE | `/api/apps/{id}` | stops container, deletes history + webhooks |
-| POST | `/api/apps/{id}/deployments` | `{containerPort?, projectPath?}`; `202`, `409` if one in progress |
+| POST | `/api/apps/{id}/deployments` | `{containerPort?, projectPath?, dockerfilePath?}`; `202`, `409` if one in progress |
 | GET | `/api/apps/{id}/deployments` | last 50 (`?status=Failed` filters, case-insensitive) |
 | GET | `/api/deployments/{id}` | one |
 | POST | `/api/deployments/{id}/cancel` | cancel a queued deployment (`409` once claimed) |
