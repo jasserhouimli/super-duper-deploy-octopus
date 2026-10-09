@@ -15,6 +15,24 @@
 name: octopus
 
 services:
+  # Opt-in control-plane database. SQLite stays the default; to use Postgres,
+  # uncomment the ConnectionStrings__Octopus lines below (same value in both
+  # services) and set POSTGRES_PASSWORD in a local .env (never commit it).
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: octopus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-octopus-dev-only}
+      POSTGRES_DB: octopus
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U octopus -d octopus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -23,6 +41,7 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:5000
       ConnectionStrings__Octopus: Data Source=/data/octopus.db
+      # ConnectionStrings__Octopus: Host=localhost;Port=5432;Username=octopus;Password=${POSTGRES_PASSWORD:-octopus-dev-only};Database=octopus
       Octopus__Workspace: /data/workspace
     volumes:
       - octopus-data:/data
@@ -35,6 +54,7 @@ services:
     network_mode: host
     environment:
       ConnectionStrings__Octopus: Data Source=/data/octopus.db
+      # ConnectionStrings__Octopus: Host=localhost;Port=5432;Username=octopus;Password=${POSTGRES_PASSWORD:-octopus-dev-only};Database=octopus
       Octopus__Workspace: /data/workspace
     volumes:
       - octopus-data:/data
@@ -46,3 +66,4 @@ services:
 
 volumes:
   octopus-data:
+  pgdata:

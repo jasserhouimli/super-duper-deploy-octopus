@@ -80,6 +80,23 @@ dotnet run --project src/Octopus.Worker # same env in terminal 2
 > Existing DB files are upgraded in place on startup (`DbBootstrap`); Postgres +
 > real EF migrations are on the roadmap.
 
+## Postgres (opt-in)
+
+`docker-compose.yml` ships a `db` service (`postgres:17-alpine`, data in the
+`pgdata` volume) that is idle until you point both services at it — SQLite
+stays the default. Any connection string containing `Host=` selects the Npgsql
+provider automatically (`OctopusDbOptions`):
+
+```powershell
+# .env next to docker-compose.yml (never commit real passwords):
+"POSTGRES_PASSWORD=long-random-value" | Out-File -Encoding ascii .env
+```
+
+Then uncomment the `ConnectionStrings__Octopus` Postgres lines in both the
+`api` and `worker` services and `docker compose up --build -d`. Schema is
+created with `EnsureCreated` for now; real EF migrations are next, which is
+also when the SQLite `DbBootstrap` upgrade path gets retired.
+
 Register + deploy (container must listen on `8080` by default,
 e.g. `ASPNETCORE_URLS=http://+:8080`):
 
