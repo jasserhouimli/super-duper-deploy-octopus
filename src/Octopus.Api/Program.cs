@@ -15,8 +15,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddDbContext<OctopusDbContext>(o =>
-    o.UseSqlite(builder.Configuration.GetConnectionString("Octopus")
-        ?? "Data Source=octopus.db"));
+    OctopusDbOptions.Configure(o, builder.Configuration.GetConnectionString("Octopus")));
 
 builder.Services.AddSingleton<OctopusProxyConfigProvider>();
 builder.Services.AddSingleton<IProxyConfigProvider>(sp => sp.GetRequiredService<OctopusProxyConfigProvider>());

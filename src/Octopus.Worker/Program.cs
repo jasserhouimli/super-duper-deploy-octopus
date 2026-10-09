@@ -4,7 +4,7 @@ using Octopus.Worker;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddDbContext<OctopusDbContext>(o =>
-    o.UseSqlite(builder.Configuration.GetConnectionString("Octopus") ?? "Data Source=octopus.db"));
+    OctopusDbOptions.Configure(o, builder.Configuration.GetConnectionString("Octopus")));
 builder.Services.AddHostedService<DeploymentWorker>();
 
 var host = builder.Build();
