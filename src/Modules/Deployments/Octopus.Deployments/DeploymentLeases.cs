@@ -36,4 +36,18 @@ public static class DeploymentLeases
         deployment.LeaseExpiresAt = now.Add(duration);
         return true;
     }
+
+    /// <summary>
+    /// Graceful-shutdown handoff: clears this worker's active leases so a
+    /// restart (or peer) can recover the work immediately instead of waiting
+    /// for the lease to lapse. Returns the number of released deployments.
+    /// </summary>
+    public static async Task<int> ReleaseOwnedAsync(
+        OctopusDbContext db, string owner, CancellationToken ct = default) =>
+        await db.Deployments.Where(d =>
+            (d.Status == DeploymentStatus.Cloning || d.Status == DeploymentStatus.Building || d.Status == DeploymentStatus.Starting)
+            && d.LeaseOwner == owner)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(d => d.LeaseOwner, (string?)null)
+                .SetProperty(d => d.LeaseExpiresAt, (DateTimeOffset?)null), ct);
 }

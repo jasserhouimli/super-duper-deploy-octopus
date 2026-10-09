@@ -34,11 +34,28 @@ public sealed class DeploymentWorker(
             return configured.Trim();
         return $"{Environment.MachineName}:{Environment.ProcessId}";
     }
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        // Handoff: release our active leases so recovery is immediate instead
+        // of waiting for them to lapse. In-flight docker work is left alone.
+        try
+        {
+            using var scope = services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<OctopusDbContext>();
+            var released = await DeploymentLeases.ReleaseOwnedAsync(db, WorkerId, cancellationToken);
+            if (released > 0)
+                log.LogInformation("Released {Count} lease(s) on shutdown.", released);
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "Lease release on shutdown failed.");
+        }
+        await base.StopAsync(cancellationToken);
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await RecoverStaleAsync(stoppingToken);
-
         while (!stoppingToken.IsCancellationRequested)
         {
             try

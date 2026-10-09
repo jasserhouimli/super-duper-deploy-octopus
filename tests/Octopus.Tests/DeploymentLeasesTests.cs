@@ -83,4 +83,25 @@ public sealed class DeploymentLeasesTests : IAsyncLifetime
         Assert.Contains(found, d => d.Id == expired.Id);
         Assert.Contains(found, d => d.Id == noLease.Id);
     }
+
+    [Fact]
+    public async Task ReleaseOwned_clears_only_own_active_leases()
+    {
+        var mine = new Deployment { Id = Guid.NewGuid(), AppId = Guid.NewGuid(), Status = DeploymentStatus.Building, LeaseOwner = "w1", LeaseExpiresAt = _now.AddMinutes(2) };
+        var peer = new Deployment { Id = Guid.NewGuid(), AppId = Guid.NewGuid(), Status = DeploymentStatus.Cloning, LeaseOwner = "w2", LeaseExpiresAt = _now.AddMinutes(2) };
+        var idle = new Deployment { Id = Guid.NewGuid(), AppId = Guid.NewGuid(), Status = DeploymentStatus.Queued, LeaseOwner = "w1" };
+        _db.Deployments.AddRange(mine, peer, idle);
+        await _db.SaveChangesAsync();
+
+        Assert.Equal(1, await DeploymentLeases.ReleaseOwnedAsync(_db, "w1"));
+
+        await using var check = new OctopusDbContext(
+            new DbContextOptionsBuilder<OctopusDbContext>().UseSqlite(_conn).Options);
+        var mineRow = await check.Deployments.FindAsync([mine.Id]);
+        Assert.Null(mineRow!.LeaseOwner);
+        Assert.Null(mineRow.LeaseExpiresAt);
+        Assert.Equal(DeploymentStatus.Building, mineRow.Status); // status untouched: recovery decides
+        var peerRow = await check.Deployments.FindAsync([peer.Id]);
+        Assert.Equal("w2", peerRow!.LeaseOwner);
+    }
 }
