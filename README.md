@@ -93,9 +93,11 @@ provider automatically (`OctopusDbOptions`):
 ```
 
 Then uncomment the `ConnectionStrings__Octopus` Postgres lines in both the
-`api` and `worker` services and `docker compose up --build -d`. Schema is
-created with `EnsureCreated` for now; real EF migrations are next, which is
-also when the SQLite `DbBootstrap` upgrade path gets retired.
+`api` and `worker` services and `docker compose up --build -d`. On Postgres
+the schema is applied with `MigrateAsync` from the checked-in `InitialCreate`
+migration (`src/Modules/Deployments/Octopus.Deployments/Migrations`); new
+schema changes land as further `dotnet ef` migrations. SQLite keeps
+`EnsureCreated` + `DbBootstrap` for zero-setup dev.
 
 Register + deploy (container must listen on `8080` by default,
 e.g. `ASPNETCORE_URLS=http://+:8080`):

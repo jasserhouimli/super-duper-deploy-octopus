@@ -45,7 +45,7 @@ var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
-    DbBootstrap.EnsureUpgraded(scope.ServiceProvider.GetRequiredService<OctopusDbContext>());
+    await DbStartup.EnsureReadyAsync(scope.ServiceProvider.GetRequiredService<OctopusDbContext>());
 }
 
 if (app.Environment.IsDevelopment())

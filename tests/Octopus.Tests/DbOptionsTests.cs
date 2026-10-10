@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Octopus.Deployments;
 
@@ -17,5 +18,28 @@ public sealed class DbOptionsTests
         var builder = new DbContextOptionsBuilder<OctopusDbContext>();
         OctopusDbOptions.Configure(builder, cs);
         Assert.Equal(postgres, builder.Options.Extensions.Any(e => e.GetType().FullName!.Contains("Npgsql")));
+    }
+
+    [Fact]
+    public void Startup_detects_provider_without_connecting()
+    {
+        using var pg = new OctopusDbContext(
+            new DbContextOptionsBuilder<OctopusDbContext>().UseNpgsql("Host=db").Options);
+        using var lite = new OctopusDbContext(
+            new DbContextOptionsBuilder<OctopusDbContext>().UseSqlite("DataSource=:memory:").Options);
+        Assert.True(DbStartup.IsPostgres(pg));
+        Assert.False(DbStartup.IsPostgres(lite));
+    }
+
+    [Fact]
+    public async Task Startup_readies_sqlite_schema()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        await conn.OpenAsync();
+        using var db = new OctopusDbContext(
+            new DbContextOptionsBuilder<OctopusDbContext>().UseSqlite(conn).Options);
+        await DbStartup.EnsureReadyAsync(db);
+        Assert.True(await db.Database.CanConnectAsync());
+        Assert.True((await db.Database.GetAppliedMigrationsAsync()).Any() == false); // SQLite: bootstrap, not migrations
     }
 }

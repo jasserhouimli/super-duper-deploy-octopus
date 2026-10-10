@@ -12,7 +12,7 @@ var host = builder.Build();
 // Ensure DB exists for `dotnet run` without the API (upgrades older files in place).
 using (var scope = host.Services.CreateScope())
 {
-    DbBootstrap.EnsureUpgraded(scope.ServiceProvider.GetRequiredService<OctopusDbContext>());
+    await DbStartup.EnsureReadyAsync(scope.ServiceProvider.GetRequiredService<OctopusDbContext>());
 }
 
 host.Run();
