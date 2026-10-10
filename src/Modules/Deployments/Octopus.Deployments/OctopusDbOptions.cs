@@ -10,7 +10,7 @@ namespace Octopus.Deployments;
 /// </summary>
 public static class OctopusDbOptions
 {
-    public static void Configure(DbContextOptionsBuilder<OctopusDbContext> builder, string? connectionString)
+    public static void Configure(DbContextOptionsBuilder builder, string? connectionString)
     {
         var cs = string.IsNullOrWhiteSpace(connectionString) ? "Data Source=octopus.db" : connectionString;
         if (IsPostgres(cs))
