@@ -44,6 +44,10 @@ public static class DeploymentQueries
         return stale.Count;
     }
 
+    /// <summary>Fresh existence check (separate read, not the run's tracked entity).</summary>
+    public static Task<bool> AppExistsAsync(OctopusDbContext db, Guid appId, CancellationToken ct = default) =>
+        db.Apps.AnyAsync(a => a.Id == appId, ct);
+
     /// <summary>
     /// Retention: keeps the newest <paramref name="keepLast"/> deployments per
     /// app (matching the list window) and deletes older ones with their logs.

@@ -272,6 +272,25 @@ public sealed class DeploymentWorker(
             await SaveAsync();
             if (!promote.IsSuccess) throw new InvalidOperationException(promote.Error);
 
+            // The app may have been deleted mid-run: never report Running or
+            // leave a container behind for an app that no longer exists.
+            // (Fresh read — the run's tracked entity cannot see the delete.)
+            var appExists = await DeploymentQueries.AppExistsAsync(db, app.Id, ct);
+            if (!appExists)
+            {
+                Log("App was deleted during deploy; removing container.");
+                await docker.StopAndRemoveAsync(canonical, _ => { }, ct);
+                try
+                {
+                    deployment.Status = DeploymentStatus.Failed;
+                    deployment.Error = "App deleted during deploy.";
+                    deployment.FinishedAt = DateTimeOffset.UtcNow;
+                    await SaveAsync();
+                }
+                catch { /* record went with the app */ }
+                return;
+            }
+
             deployment.Status = DeploymentStatus.Running;
             deployment.FinishedAt = DateTimeOffset.UtcNow;
             app.Status = AppStatus.Running;

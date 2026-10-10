@@ -56,6 +56,16 @@ public sealed class DeploymentLogQueryTests : IAsyncLifetime
         Assert.Equal(5, logs.Count);
         Assert.Empty(await DeploymentQueries.ListLogsAsync(_db, Guid.NewGuid()));
     }
+
+    [Fact]
+    public async Task AppExists_reflects_present_and_missing_apps()
+    {
+        var id = Guid.NewGuid();
+        Assert.False(await DeploymentQueries.AppExistsAsync(_db, id));
+        _db.Apps.Add(new Octopus.Apps.App { Id = id, Name = "x", Slug = "x", RepoUrl = "https://github.com/o/r.git", Branch = "main" });
+        await _db.SaveChangesAsync();
+        Assert.True(await DeploymentQueries.AppExistsAsync(_db, id));
+    }
 }
 
 public sealed class DeploymentPruneTests : IAsyncLifetime
