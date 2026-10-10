@@ -119,4 +119,19 @@ public sealed class DockerQuotaArgsTests
         Assert.Equal("logs --tail 50 \"octopus-demo\"", DockerRunner.BuildLogsArgs("octopus-demo", 50));
         Assert.Equal("logs --tail 200 \"c\"", DockerRunner.BuildLogsArgs("c", 9999));
     }
+
+    [Fact]
+    public void Sidecar_names_are_unique_per_deployment()
+    {
+        var a = DockerRunner.SidecarName("demo", Guid.NewGuid());
+        var b = DockerRunner.SidecarName("demo", Guid.NewGuid());
+        Assert.NotEqual(a, b);
+        Assert.StartsWith("octopus-demo-", a);
+        Assert.Matches("^octopus-demo-[0-9a-f]{8}$", a);
+    }
+
+    [Fact]
+    public void Rename_args_quote_both_names() =>
+        Assert.Equal("rename \"octopus-demo-abc12345\" \"octopus-demo\"",
+            DockerRunner.BuildRenameArgs("octopus-demo-abc12345", "octopus-demo"));
 }

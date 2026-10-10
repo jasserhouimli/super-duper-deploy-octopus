@@ -13,6 +13,30 @@ public sealed class DockerRunner
 
     public static string ContainerName(string slug) => $"octopus-{slug}";
 
+    /// <summary>Unique per-attempt name so a new container starts beside the live one (blue/green).</summary>
+    public static string SidecarName(string slug, Guid deploymentId) =>
+        $"octopus-{slug}-{deploymentId.ToString("N")[..8]}";
+
+    /// <summary>
+    /// Promotes a healthy sidecar to canonical: stops/removes the old container,
+    /// then renames the sidecar so all existing stop/lookup paths keep working.
+    /// </summary>
+    public async Task<Result<string>> PromoteAsync(string canonicalName, string sidecarName, Action<string> log, CancellationToken ct)
+    {
+        await StopAndRemoveAsync(canonicalName, log, ct);
+        var args = BuildRenameArgs(sidecarName, canonicalName);
+        log("$ docker " + args);
+        var run = await ProcessRunner.RunAsync("docker", args, Environment.CurrentDirectory, TimeSpan.FromSeconds(30), ct);
+        AppendLog(log, run.StdOut);
+        AppendLog(log, run.StdErr);
+        if (run.TimedOut) return Result<string>.Fail("Docker rename timed out.");
+        return run.ExitCode == 0 ? Result<string>.Ok(canonicalName) : Result<string>.Fail($"Docker rename failed (exit {run.ExitCode}).");
+    }
+
+    /// <summary>Builds `docker rename` args (names are platform-generated slugs, never user input).</summary>
+    public static string BuildRenameArgs(string sidecarName, string canonicalName) =>
+        $"rename \"{sidecarName}\" \"{canonicalName}\"";
+
     public async Task<Result<string>> BuildAsync(string contextDir, string imageName, Action<string> log, CancellationToken ct)
     {
         if (!File.Exists(Path.Combine(contextDir, "Dockerfile")))
