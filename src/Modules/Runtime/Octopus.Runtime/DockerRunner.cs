@@ -123,9 +123,11 @@ public sealed class DockerRunner
         string memory,
         string cpus,
         Action<string> log,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool stopExisting = true)
     {
-        await StopAndRemoveAsync(containerName, log, ct);
+        if (stopExisting)
+            await StopAndRemoveAsync(containerName, log, ct);
 
         string? envFile = null;
         try

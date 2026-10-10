@@ -173,14 +173,15 @@ A repo `Dockerfile` always wins. Override per deployment via `projectPath`
 (relative `.csproj`, no `..`). Monorepos can point at a nested Dockerfile via
 `dockerfilePath` (relative, no `..`, must exist — built with `docker build -f`):
 
-## Health-gated deploys
+## Health-gated blue/green deploys
 
-After `docker run`, the worker waits up to 30 s for the container to accept TCP
-on its loopback host port (`5100-5999`) and checks `docker inspect` state
-(images with a `HEALTHCHECK` must report `healthy`). A container that never
-becomes ready is stopped and the deployment is marked `Failed` — a bad image
-never becomes the `Running` route. Probes are loopback-only, so there is no
-SSRF surface.
+The new image starts as a sidecar beside the live container on a fresh port
+(`5100-5999`). The worker waits up to 30 s for TCP readiness and checks
+`docker inspect` state (images with a `HEALTHCHECK` must report `healthy`).
+Only then is the sidecar promoted (`docker rename` to the canonical name, old
+container stopped) and the route switched. A bad image is removed and the
+deployment marked `Failed` — the previous container keeps serving throughout.
+Probes are loopback-only, so there is no SSRF surface.
 
 ## API
 
@@ -256,7 +257,7 @@ the worker prunes older records when a deployment reaches a terminal state.
 3. ~~`dotnet` buildpack (no Dockerfile needed)~~ Done (v0.2); ~~health-gated traffic switch~~ Done (v0.4: TCP readiness + inspect gate, bad images fail instead of routing).
 4. ~~CI (build + test + architecture tests + image builds) and compose.~~ Done (v0.3).
 5. ~~API-key auth~~ Done (v0.5); ~~log streaming~~ Done (v0.5: cursor tail + SSE stream). OIDC is future.
-6. ~~Multi-worker leases/heartbeats~~ Done (v0.6: optimistic lease claims + heartbeat + lapsed-lease recovery). Remaining: blue/green, custom domains.
+6. ~~Multi-worker leases/heartbeats~~ Done (v0.6). ~~Blue/green~~ Done (v0.7: sidecar start, readiness gate, rename promote). Remaining: custom domains.
 
 ## Repo layout
 

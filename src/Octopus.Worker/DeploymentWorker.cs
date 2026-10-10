@@ -225,48 +225,58 @@ public sealed class DeploymentWorker(
             deployment.Status = DeploymentStatus.Starting;
             await SaveAsync();
 
+            // Blue/green: the sidecar starts beside the live container on a fresh
+            // port (the old port stays bound until promote), so a bad image
+            // never takes the app down.
             var taken = await db.Apps.Where(a => a.Status == AppStatus.Running && a.Id != app.Id)
                 .Select(a => a.TargetPort).ToListAsync(ct);
-            var port = app.TargetPort is >= PortAllocator.MinPort and <= PortAllocator.MaxPort
-                && !taken.Contains(app.TargetPort)
-                ? app.TargetPort
-                : PortAllocator.FindFreePort(new HashSet<int>(taken));
+            var busy = new HashSet<int>(taken);
+            if (app.TargetPort > 0) busy.Add(app.TargetPort);
+            var port = PortAllocator.FindFreePort(busy);
 
+            var canonical = DockerRunner.ContainerName(app.Slug);
+            var sidecar = DockerRunner.SidecarName(app.Slug, deployment.Id);
+            Log($"Starting sidecar {sidecar} for readiness on 127.0.0.1:{port}.");
             var start = await docker.StartWithEnvAndQuotaAsync(
-                DockerRunner.ContainerName(app.Slug), image, port, deployment.ContainerPort,
+                sidecar, image, port, deployment.ContainerPort,
                 await LoadEnvAsync(db, app.Id, ct),
                 DockerRunner.FormatMemory(app.MaxMemoryMb), DockerRunner.FormatCpus(app.CpuMillicores),
-                Log, ct);
+                Log, ct, stopExisting: false);
             await SaveAsync();
             if (!start.IsSuccess) throw new InvalidOperationException(start.Error);
 
-            // Health gate: the container must accept TCP on its host port and (when
-            // docker reports state) look healthy. A bad image fails the deployment
-            // instead of being marked Running.
+            // Health gate: the sidecar must accept TCP on its host port and (when
+            // docker reports state) look healthy. Unhealthy sidecars are removed;
+            // the live container keeps serving.
             Log($"Probing readiness on 127.0.0.1:{port} (30s budget).");
             var ready = await ContainerHealth.WaitForTcpAsync(
                 port, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1), ct);
-            var inspect = await DockerInspect.InspectAsync(DockerRunner.ContainerName(app.Slug), ct);
+            var inspect = await DockerInspect.InspectAsync(sidecar, ct);
             var inspectHealthy = !inspect.IsSuccess || inspect.Value is null
                 ? (bool?)null // docker gave no usable state: TCP probe decides
                 : DockerInspect.IsHealthy(inspect.Value);
             if (!ready || inspectHealthy == false)
             {
                 Log(ready
-                    ? "Readiness failed: container state is not healthy; stopping."
-                    : "Readiness failed: port did not accept connections within 30s; stopping.");
-                Log("--- container log tail (last 50 lines) ---");
-                await docker.LogsAsync(DockerRunner.ContainerName(app.Slug), 50, Log, ct);
-                await docker.StopAndRemoveAsync(DockerRunner.ContainerName(app.Slug), _ => { }, ct);
+                    ? "Readiness failed: container state is not healthy; removing sidecar."
+                    : "Readiness failed: port did not accept connections within 30s; removing sidecar.");
+                Log("--- sidecar log tail (last 50 lines) ---");
+                await docker.LogsAsync(sidecar, 50, Log, ct);
+                await docker.StopAndRemoveAsync(sidecar, _ => { }, ct);
                 throw new InvalidOperationException("Container did not become ready within 30s.");
             }
             Log("Readiness passed.");
+
+            Log($"Promoting sidecar to {canonical}.");
+            var promote = await docker.PromoteAsync(canonical, sidecar, Log, ct);
+            await SaveAsync();
+            if (!promote.IsSuccess) throw new InvalidOperationException(promote.Error);
 
             deployment.Status = DeploymentStatus.Running;
             deployment.FinishedAt = DateTimeOffset.UtcNow;
             app.Status = AppStatus.Running;
             app.TargetPort = port;
-            app.ContainerName = DockerRunner.ContainerName(app.Slug);
+            app.ContainerName = canonical;
             app.UpdatedAt = DateTimeOffset.UtcNow;
             Log($"Running at /apps/{app.Slug}/ -> 127.0.0.1:{port} (container:{deployment.ContainerPort}).");
             await SaveAsync();
